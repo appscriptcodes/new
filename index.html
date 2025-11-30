@@ -1788,7 +1788,7 @@ return type === 'debit' || type === 'expense';
 await maybeUploadField(data, 'Transactions', 'Attachment', 'txn');
 
 if (editRow) {
-  await api.upsertRow('Transactions', 'Transaction ID', { ...editRow, ...data });
+  await api.upsertRow('Transactions', 'Serial Number', { ...editRow, ...data });
 } else {
   await api.createRow('Transactions', data);
 }
