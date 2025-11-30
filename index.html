@@ -2354,7 +2354,7 @@ function TenantsPage({ data, isAdmin, onRefresh }) {
               await maybeUploadField(data, 'Tenants', 'Attachments', 'tenant');
 
 if (editRow) {
-  await api.upsertRow('Tenants', 'Tenant Name', { ...editRow, ...data });
+  await api.upsertRow('Tenants', 'Mobile', { ...editRow, ...data });
 } else {
   await api.createRow('Tenants', data);
 }
