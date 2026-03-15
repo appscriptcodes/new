@@ -159,6 +159,7 @@ const api = {
     ChartOfAccounts: () => getJSON('listChartOfAccounts').catch(() => ({ rows: [] })),
     Tenants:         () => getJSON('listTenants'),
     Residents:       () => getJSON('listResidents').catch(() => ({ rows: [] })),
+    Cheques:         () => getJSON('listCheques').catch(() => ({ rows: [] })),
   },
   async upsertRow(sheet, key, row) { return postPlain({ op: 'upsertRow', sheet, key, row }); },
   async createRow(sheet, row)      { return postPlain({ op: 'createRow', sheet, row }); },
