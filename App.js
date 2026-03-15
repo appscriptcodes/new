@@ -60,7 +60,6 @@ function App() {
     Directory: [], Notices: [], Issues: [], Transactions: [],
     Documents: [], Voters: [], OpeningBalances: [], ChartOfAccounts: [], Tenants: [],
     Residents: typeof RESIDENTS_STATIC_DATA !== 'undefined' ? RESIDENTS_STATIC_DATA : [],
-    Cheques:   typeof CHEQUES_STATIC_DATA   !== 'undefined' ? CHEQUES_STATIC_DATA   : [],
   });
   const [loading,             setLoading]             = useState(true);
   const [sidebarOpen,         setSidebarOpen]         = useState(true);
@@ -97,7 +96,7 @@ function App() {
       const results = await Promise.all([
         api.list.Directory(), api.list.Notices(), api.list.Issues(), api.list.Transactions(),
         api.list.Documents(), api.list.Voters(), api.list.OpeningBalances(),
-        api.list.ChartOfAccounts(), api.list.Tenants(), api.list.Residents(), api.list.Cheques()
+        api.list.ChartOfAccounts(), api.list.Tenants(), api.list.Residents()
       ]);
       setData({
         Directory:       results[0]?.rows || [],
@@ -110,7 +109,6 @@ function App() {
         ChartOfAccounts: results[7]?.rows || [],
         Tenants:         results[8]?.rows || [],
         Residents:       results[9]?.rows?.length  ? results[9].rows  : (typeof RESIDENTS_STATIC_DATA !== 'undefined' ? RESIDENTS_STATIC_DATA : []),
-        Cheques:         results[10]?.rows?.length ? results[10].rows : (typeof CHEQUES_STATIC_DATA   !== 'undefined' ? CHEQUES_STATIC_DATA   : []),
       });
     } catch (e) { showToast('Failed to load data', 'error'); }
     finally     { setLoading(false); }
@@ -244,7 +242,7 @@ function App() {
             <Dashboard data={data} onNavigate={setView} isAdmin={isAdmin} />
           ) : view === 'Cheques' ? (
             isAdmin
-              ? <ChequesPage data={data.Cheques} />
+              ? <ChequesPage />
               : <AccessDenied />
           ) : view === 'Residents' ? (
             isAdmin
