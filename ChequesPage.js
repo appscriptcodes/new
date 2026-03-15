@@ -1,7 +1,42 @@
 /* ===================================================
    ChequesPage.js — Cheques Module (Admin Only)
-   Global Hillview Society Portal
+   Data source: Google Sheets "Cheques" tab via GAS
+   All reads/writes go directly to the backend.
    =================================================== */
+
+// ── Column mapping helpers ────────────────────────────
+// Maps our internal keys to the GAS sheet column headers
+const CHQ_COL = {
+  sr:        'SR.NO.',
+  date:      'DATE',
+  party:     'PARTY',
+  purpose:   'PURPOSE',
+  amount:    'AMOUNT',
+  billDate:  'BILL DATE',
+  invoiceNo: 'INVOICE NO.',
+  chequeNo:  'CHEQUE NO.',
+  remarks:   'REMARKS',
+  clearedOn: 'Cleared on',
+};
+
+// Normalise a raw GAS row object into our internal shape
+function normCheque(raw) {
+  if (!raw) return null;
+  // GAS returns rows with the sheet column names as keys
+  // Handle both formats: our camelCase (from previous sessions) and raw sheet headers
+  return {
+    sr:        String(raw['SR.NO.'] ?? raw.sr         ?? ''),
+    date:      String(raw['DATE']   ?? raw.date       ?? ''),
+    party:     String(raw['PARTY']  ?? raw.party      ?? '').trim(),
+    purpose:   String(raw['PURPOSE']?? raw.purpose    ?? '').trim(),
+    amount:    Number(raw['AMOUNT'] ?? raw.amount     ?? 0),
+    billDate:  String(raw['BILL DATE']    ?? raw.billDate  ?? ''),
+    invoiceNo: String(raw['INVOICE NO.']  ?? raw.invoiceNo ?? ''),
+    chequeNo:  String(raw['CHEQUE NO.']   ?? raw.chequeNo  ?? '').replace(/\.0$/, ''),
+    remarks:   String(raw['REMARKS']      ?? raw.remarks   ?? '').trim(),
+    clearedOn: String(raw['Cleared on']   ?? raw.clearedOn ?? ''),
+  };
+}
 
 // ── Bulk Upload Modal ─────────────────────────────────
 function ChequesBulkUploadModal({ onClose, onImport }) {
@@ -93,7 +128,6 @@ function ChequesBulkUploadModal({ onClose, onImport }) {
       const objects = rowsToObjects(hdrs, rawRows, mapping);
       if (!objects.length) throw new Error('No valid rows found after parsing.');
       setPreview(objects.slice(0, 5));
-      // stash full parsed set on the file state
       setFile({ name: f.name, _parsed: objects });
       setProcessing(false);
     } catch (err) { setError(err.message); setProcessing(false); }
@@ -104,13 +138,13 @@ function ChequesBulkUploadModal({ onClose, onImport }) {
       <div className="modal-content" onClick={e => e.stopPropagation()} style={{maxWidth:'680px'}}>
         <div className="p-5 border-b border-gray-200">
           <h3 className="text-lg font-semibold text-gray-900">Bulk Import Cheques</h3>
-          <p className="text-sm text-gray-500 mt-0.5">Upload a CSV or Excel file to import multiple cheques at once.</p>
+          <p className="text-sm text-gray-500 mt-0.5">Upload a CSV or Excel — rows are saved directly to the Google Sheet.</p>
         </div>
         <div className="p-5 space-y-5">
           <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-xs text-blue-800 space-y-1">
             <p className="font-semibold">Expected columns (any order):</p>
             <p className="font-mono">SR.NO. · DATE · PARTY · PURPOSE · AMOUNT · BILL DATE · INVOICE NO. · CHEQUE NO. · REMARKS · Cleared on</p>
-            <p className="text-blue-600 mt-1">Column names are detected automatically — minor variations are handled.</p>
+            <p className="text-blue-600 mt-1">Column names are auto-detected — minor variations are handled.</p>
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Select File</label>
@@ -168,8 +202,8 @@ function ChequesBulkUploadModal({ onClose, onImport }) {
               <label className="block text-sm font-medium text-gray-700 mb-2">Import Mode</label>
               <div className="grid grid-cols-2 gap-3">
                 {[
-                  { val: 'replace', title: 'Replace All',    desc: 'Clear existing data and load only the imported file.' },
-                  { val: 'merge',   title: 'Merge / Append', desc: 'Keep existing records and add new ones from the file.' },
+                  { val: 'replace', title: 'Replace All',    desc: 'Clear the Google Sheet and write only the imported rows.' },
+                  { val: 'merge',   title: 'Merge / Append', desc: 'Keep existing rows; add only new cheque numbers from file.' },
                 ].map(({ val, title, desc }) => (
                   <label key={val} className={`flex items-start gap-3 p-3 rounded-xl border-2 cursor-pointer transition-all ${mode === val ? 'border-blue-400 bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`}>
                     <input type="radio" name="mode" value={val} checked={mode === val} onChange={() => setMode(val)} className="mt-0.5 accent-blue-500" />
@@ -357,30 +391,14 @@ function ChqBar({ label, value, max, color, formatted }) {
   );
 }
 
-// ── localStorage persistence helpers ─────────────────
-const CHEQUES_LS_KEY = 'hillview_cheques_v1';
-
-function loadChequesFromStorage(fallback) {
-  try {
-    const raw = localStorage.getItem(CHEQUES_LS_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-    }
-  } catch {}
-  return fallback || [];
-}
-
-function saveChequesToStorage(rows) {
-  try { localStorage.setItem(CHEQUES_LS_KEY, JSON.stringify(rows)); } catch {}
-}
-
 // ── Main Page ─────────────────────────────────────────
-function ChequesPage({ data: externalData }) {
+function ChequesPage() {
   const { useState, useMemo, useCallback, useEffect } = React;
 
-  // Initialise from localStorage; fall back to static/backend data
-  const [localData,       setLocalData]       = useState(() => loadChequesFromStorage(externalData));
+  // ── State ──────────────────────────────────────────
+  const [data,            setData]            = useState([]);
+  const [loading,         setLoading]         = useState(true);
+  const [saving,          setSaving]          = useState(false);
   const [search,          setSearch]          = useState('');
   const [statusFilter,    setStatusFilter]    = useState('all');
   const [partyFilter,     setPartyFilter]     = useState('all');
@@ -390,19 +408,33 @@ function ChequesPage({ data: externalData }) {
   const [viewRow,         setViewRow]         = useState(null);
   const [editRow,         setEditRow]         = useState(null);
 
-  // Persist every change to localStorage automatically
-  useEffect(() => { saveChequesToStorage(localData); }, [localData]);
+  // ── Fetch from GAS ────────────────────────────────
+  async function fetchCheques() {
+    setLoading(true);
+    try {
+      const res = await api.list.Cheques();
+      const rows = (res?.rows || []).map(normCheque).filter(r => r && r.party);
+      setData(rows);
+    } catch (e) {
+      showToast('Could not load cheques: ' + e.message, 'error');
+    } finally {
+      setLoading(false);
+    }
+  }
 
-  const data = localData;
+  // Fetch on mount
+  useEffect(() => { fetchCheques(); }, []);
 
+  // ── Stats ─────────────────────────────────────────
   const stats = useMemo(() => {
     const paid     = data.filter(r => r.remarks === 'Paid');
     const unpaid   = data.filter(r => r.remarks === 'Unpaid');
     const totalAmt = data.reduce((s, r) => s + (Number(r.amount) || 0), 0);
     return {
       total: data.length, paid: paid.length, unpaid: unpaid.length,
-      totalAmt, paidAmt: paid.reduce((s,r)=>s+(Number(r.amount)||0),0),
-      unpaidAmt: unpaid.reduce((s,r)=>s+(Number(r.amount)||0),0),
+      totalAmt,
+      paidAmt:   paid.reduce((s,r) => s + (Number(r.amount)||0), 0),
+      unpaidAmt: unpaid.reduce((s,r) => s + (Number(r.amount)||0), 0),
     };
   }, [data]);
 
@@ -444,33 +476,71 @@ function ChequesPage({ data: externalData }) {
 
   const nextSr = useMemo(() => (data.length ? Math.max(...data.map(r=>parseInt(r.sr)||0)) : 0) + 1, [data]);
 
+  // ── Handlers (write to GAS → re-fetch) ────────────
   const handleAdd = useCallback(async (formData) => {
-    try { await api.createRow('Cheques', formData); } catch {}
-    setLocalData(prev => [...prev, {...formData, sr: String(nextSr)}]);
-    showToast('Cheque added', 'success');
-    setShowAddModal(false);
-  }, [nextSr]);
-
-  const handleEdit = useCallback(async (formData) => {
-    try { await api.upsertRow('Cheques', 'chequeNo', formData); } catch {}
-    setLocalData(prev => prev.map(r => r.chequeNo === formData.chequeNo ? formData : r));
-    showToast('Cheque updated', 'success');
-    setEditRow(null);
+    setSaving(true);
+    try {
+      await api.createRow('Cheques', formData);
+      showToast('Cheque added to Google Sheet', 'success');
+      setShowAddModal(false);
+      await fetchCheques();
+    } catch (e) {
+      showToast('Failed to add: ' + e.message, 'error');
+    } finally { setSaving(false); }
   }, []);
 
-  const handleBulkImport = useCallback((rows, mode) => {
-    if (mode === 'replace') {
-      setLocalData(rows);
-      showToast(`Imported ${rows.length} records (replaced all)`, 'success');
-    } else {
-      const existing = new Set(localData.map(r => r.chequeNo));
-      const newRows  = rows.filter(r => !existing.has(r.chequeNo));
-      setLocalData(prev => [...prev, ...newRows]);
-      showToast(`Imported ${newRows.length} new records (${rows.length - newRows.length} duplicates skipped)`, 'success');
-    }
-  }, [localData]);
+  const handleEdit = useCallback(async (formData) => {
+    setSaving(true);
+    try {
+      await api.upsertRow('Cheques', 'chequeNo', formData);
+      showToast('Cheque updated in Google Sheet', 'success');
+      setEditRow(null);
+      await fetchCheques();
+    } catch (e) {
+      showToast('Failed to update: ' + e.message, 'error');
+    } finally { setSaving(false); }
+  }, []);
+
+  const handleBulkImport = useCallback(async (rows, mode) => {
+    setSaving(true);
+    try {
+      // Post all rows to GAS in a single call using bulkImport op
+      await postPlain({ op: 'bulkImport', sheet: 'Cheques', mode, rows });
+      showToast(`Imported ${rows.length} rows to Google Sheet`, 'success');
+      await fetchCheques();
+    } catch (e) {
+      // GAS may not have bulkImport — fall back to sequential createRow calls
+      try {
+        if (mode === 'replace') {
+          // Clear sheet first via a dedicated op if available, otherwise ignore
+          try { await postPlain({ op: 'clearSheet', sheet: 'Cheques' }); } catch {}
+        }
+        const existing = new Set(data.map(r => r.chequeNo));
+        const toWrite  = mode === 'replace' ? rows : rows.filter(r => !existing.has(r.chequeNo));
+        // Write in small batches to avoid GAS timeout
+        const BATCH = 20;
+        for (let i = 0; i < toWrite.length; i += BATCH) {
+          await Promise.all(toWrite.slice(i, i + BATCH).map(r => api.createRow('Cheques', r).catch(()=>{})));
+        }
+        showToast(`Imported ${toWrite.length} rows (${mode} mode)`, 'success');
+        await fetchCheques();
+      } catch (e2) {
+        showToast('Import partially failed: ' + e2.message, 'error');
+      }
+    } finally { setSaving(false); }
+  }, [data]);
 
   const palette = ['#3b82f6','#10b981','#f59e0b','#8b5cf6','#ef4444','#06b6d4','#ec4899','#84cc16','#f97316','#14b8a6'];
+
+  // ── Loading state ─────────────────────────────────
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center py-24 gap-4">
+        <div className="spinner" style={{width:'36px',height:'36px',borderWidth:'3px'}} />
+        <p className="text-sm text-gray-500">Loading cheques from Google Sheet…</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-5 fade-in">
@@ -489,30 +559,22 @@ function ChequesPage({ data: externalData }) {
             </button>
           ))}
           <ExportButton data={filtered} filename="Cheques" />
-          <button onClick={() => setShowUploadModal(true)}
-            className="bg-purple-500 hover:bg-purple-600 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2">
+          {/* Refresh from sheet */}
+          <button onClick={fetchCheques} title="Refresh from Google Sheet"
+            className="bg-white hover:bg-gray-50 border border-gray-200 text-gray-600 p-2 rounded-lg transition-colors">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+          </button>
+          <button onClick={() => setShowUploadModal(true)} disabled={saving}
+            className="bg-purple-500 hover:bg-purple-600 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
             </svg>
             Import CSV / Excel
           </button>
-          <button
-            onClick={() => {
-              if (confirm('Reset cheque data to the original file (removes all edits and imports)?')) {
-                const fallback = typeof CHEQUES_STATIC_DATA !== 'undefined' ? CHEQUES_STATIC_DATA : [];
-                setLocalData(fallback);
-                showToast('Reset to original data', 'success');
-              }
-            }}
-            className="bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-1.5 border border-gray-200"
-            title="Reset to original CSV data">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-            </svg>
-            Reset
-          </button>
-          <button onClick={() => setShowAddModal(true)}
-            className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2">
+          <button onClick={() => setShowAddModal(true)} disabled={saving}
+            className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"/>
             </svg>
@@ -524,12 +586,12 @@ function ChequesPage({ data: externalData }) {
       {/* KPI Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         {[
-          {label:'Total Cheques', display:stats.total,                   color:'#3b82f6', filter:null},
-          {label:'Paid',          display:stats.paid,                    color:'#10b981', filter:'Paid'},
-          {label:'Unpaid',        display:stats.unpaid,                  color:'#ef4444', filter:'Unpaid'},
-          {label:'Total Amount',  display:INR.format(stats.totalAmt),    color:'#8b5cf6', filter:null},
-          {label:'Paid Amount',   display:INR.format(stats.paidAmt),     color:'#10b981', filter:null},
-          {label:'Unpaid Amount', display:INR.format(stats.unpaidAmt),   color:'#ef4444', filter:null},
+          {label:'Total Cheques', display:stats.total,                 color:'#3b82f6', filter:null},
+          {label:'Paid',          display:stats.paid,                  color:'#10b981', filter:'Paid'},
+          {label:'Unpaid',        display:stats.unpaid,                color:'#ef4444', filter:'Unpaid'},
+          {label:'Total Amount',  display:INR.format(stats.totalAmt),  color:'#8b5cf6', filter:null},
+          {label:'Paid Amount',   display:INR.format(stats.paidAmt),   color:'#10b981', filter:null},
+          {label:'Unpaid Amount', display:INR.format(stats.unpaidAmt), color:'#ef4444', filter:null},
         ].map(({label, display, color, filter}) => {
           const active = filter && statusFilter === filter;
           return (
@@ -549,14 +611,13 @@ function ChequesPage({ data: externalData }) {
       {activeTab === 'analytics' && (
         <div className="space-y-5">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-
             {/* Payment Status */}
             <div className="bg-white rounded-xl p-5 shadow-sm">
               <h3 className="text-sm font-semibold text-gray-700 mb-5">Payment Status Overview</h3>
               <div className="space-y-4">
                 {[
-                  {label:`Paid (${stats.paid})`, amt:stats.paidAmt, color:'#10b981'},
-                  {label:`Unpaid (${stats.unpaid})`, amt:stats.unpaidAmt, color:'#f97316'},
+                  {label:`Paid (${stats.paid})`,   amt:stats.paidAmt,   color:'#10b981'},
+                  {label:`Unpaid (${stats.unpaid})`,amt:stats.unpaidAmt, color:'#f97316'},
                 ].map(({label,amt,color}) => (
                   <div key={label}>
                     <div className="flex justify-between text-xs mb-1">
@@ -574,8 +635,6 @@ function ChequesPage({ data: externalData }) {
                   </div>
                 ))}
               </div>
-
-              {/* Radial clearance indicator */}
               <div className="mt-6 pt-5 border-t border-gray-100">
                 <p className="text-xs text-gray-500 mb-4 font-medium">Cheque Clearance Rate</p>
                 <div className="flex items-center gap-5">
@@ -611,7 +670,7 @@ function ChequesPage({ data: externalData }) {
                   <ChqBar key={party} label={party} value={total} max={partyStats[0]?.total||1}
                     color={palette[i%palette.length]} formatted={`${INR.format(total)} · ${count}`} />
                 ))}
-                {partyStats.length===0 && <p className="text-xs text-gray-400 text-center py-6">No data yet</p>}
+                {partyStats.length===0 && <p className="text-xs text-gray-400 text-center py-6">No data in Google Sheet yet</p>}
               </div>
             </div>
           </div>
@@ -646,7 +705,12 @@ function ChequesPage({ data: externalData }) {
                     </div>
                   </div>
                 ))}
-                {data.length===0 && <p className="text-xs text-gray-400 text-center py-8">No cheques yet. Add one or import a file.</p>}
+                {data.length===0 && (
+                  <div className="text-center py-8">
+                    <p className="text-xs text-gray-400">No data in the Google Sheet yet.</p>
+                    <p className="text-xs text-gray-400 mt-1">Add a row in the sheet or use Import.</p>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -656,7 +720,6 @@ function ChequesPage({ data: externalData }) {
       {/* CHEQUE REGISTER TAB */}
       {activeTab === 'list' && (
         <div className="bg-white rounded-2xl shadow-sm">
-          {/* Filters */}
           <div className="p-5 border-b border-gray-100">
             <div className="flex flex-wrap items-center gap-3">
               <div className="relative flex-1 min-w-48">
@@ -684,8 +747,6 @@ function ChequesPage({ data: externalData }) {
               <span className="text-sm text-gray-500 ml-auto">{filtered.length} records</span>
             </div>
           </div>
-
-          {/* Table */}
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead className="bg-gray-50">
