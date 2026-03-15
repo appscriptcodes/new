@@ -59,7 +59,8 @@ function App() {
   const [data,         setData]          = useState({
     Directory: [], Notices: [], Issues: [], Transactions: [],
     Documents: [], Voters: [], OpeningBalances: [], ChartOfAccounts: [], Tenants: [],
-    Residents: typeof RESIDENTS_STATIC_DATA !== 'undefined' ? RESIDENTS_STATIC_DATA : []
+    Residents: typeof RESIDENTS_STATIC_DATA !== 'undefined' ? RESIDENTS_STATIC_DATA : [],
+    Cheques:   typeof CHEQUES_STATIC_DATA   !== 'undefined' ? CHEQUES_STATIC_DATA   : [],
   });
   const [loading,             setLoading]             = useState(true);
   const [sidebarOpen,         setSidebarOpen]         = useState(true);
@@ -96,7 +97,7 @@ function App() {
       const results = await Promise.all([
         api.list.Directory(), api.list.Notices(), api.list.Issues(), api.list.Transactions(),
         api.list.Documents(), api.list.Voters(), api.list.OpeningBalances(),
-        api.list.ChartOfAccounts(), api.list.Tenants(), api.list.Residents()
+        api.list.ChartOfAccounts(), api.list.Tenants(), api.list.Residents(), api.list.Cheques()
       ]);
       setData({
         Directory:       results[0]?.rows || [],
@@ -108,8 +109,8 @@ function App() {
         OpeningBalances: results[6]?.rows || [],
         ChartOfAccounts: results[7]?.rows || [],
         Tenants:         results[8]?.rows || [],
-        Residents:       results[9]?.rows?.length ? results[9].rows :
-                         (typeof RESIDENTS_STATIC_DATA !== 'undefined' ? RESIDENTS_STATIC_DATA : []),
+        Residents:       results[9]?.rows?.length  ? results[9].rows  : (typeof RESIDENTS_STATIC_DATA !== 'undefined' ? RESIDENTS_STATIC_DATA : []),
+        Cheques:         results[10]?.rows?.length ? results[10].rows : (typeof CHEQUES_STATIC_DATA   !== 'undefined' ? CHEQUES_STATIC_DATA   : []),
       });
     } catch (e) { showToast('Failed to load data', 'error'); }
     finally     { setLoading(false); }
@@ -135,6 +136,7 @@ function App() {
     navItems.splice(2, 0, { id: 'Tenants', label: 'Tenants', icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6' });
     navItems.splice(2, 0, { id: 'Residents', label: 'Residents', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z' });
     navItems.push(
+      { id: 'Cheques',         label: 'Cheques',          icon: 'M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z' },
       { id: 'Transactions',    label: 'Transactions',    icon: 'M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z' },
       { id: 'OpeningBalances', label: 'Opening Balances', icon: 'M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z' },
       { id: 'ChartOfAccounts', label: 'Chart of Accounts', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01' }
@@ -240,6 +242,10 @@ function App() {
             <div className="flex items-center justify-center h-64"><div className="spinner" /></div>
           ) : view === 'dashboard' ? (
             <Dashboard data={data} onNavigate={setView} isAdmin={isAdmin} />
+          ) : view === 'Cheques' ? (
+            isAdmin
+              ? <ChequesPage data={data.Cheques} />
+              : <AccessDenied />
           ) : view === 'Residents' ? (
             isAdmin
               ? <ResidentsPage data={data.Residents} />
