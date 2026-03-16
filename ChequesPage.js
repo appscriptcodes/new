@@ -501,11 +501,28 @@ function ChequesPage({ gasData, onDataChange }) {
     } finally { setSaving(false); }
   }
 
+  // ── Convert internal camelCase row → exact sheet column names ──
+  // GAS upsertRow_/createRow_ maps by header name, so keys MUST match the sheet.
+  function toSheetRow(r) {
+    return {
+      'SR.NO.':      r.sr        || '',
+      'DATE':        r.date      || '',
+      'PARTY':       r.party     || '',
+      'PURPOSE':     r.purpose   || '',
+      'AMOUNT':      r.amount    || 0,
+      'BILL DATE':   r.billDate  || '',
+      'INVOICE NO.': r.invoiceNo || '',
+      'CHEQUE NO.':  r.chequeNo  || '',
+      'REMARKS':     r.remarks   || '',
+      'CLEARED ON':  r.clearedOn || '',
+    };
+  }
+
   // ── Handlers ──────────────────────────────────────
   const handleAdd = useCallback(async (formData) => {
     setSaving(true);
     try {
-      await api.createRow('Cheques', formData);
+      await api.createRow('Cheques', toSheetRow(formData));
       const res = await api.list.Cheques();
       onDataChange(res?.rows || []);
       showToast('Cheque added to Google Sheet', 'success');
@@ -518,7 +535,8 @@ function ChequesPage({ gasData, onDataChange }) {
   const handleEdit = useCallback(async (formData) => {
     setSaving(true);
     try {
-      await api.upsertRow('Cheques', 'chequeNo', formData);
+      // Key must be the exact sheet column header — 'CHEQUE NO.'
+      await api.upsertRow('Cheques', 'CHEQUE NO.', toSheetRow(formData));
       const res = await api.list.Cheques();
       onDataChange(res?.rows || []);
       showToast('Cheque updated in Google Sheet', 'success');
