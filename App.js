@@ -60,6 +60,7 @@ function App() {
     Directory: [], Notices: [], Issues: [], Transactions: [],
     Documents: [], Voters: [], OpeningBalances: [], ChartOfAccounts: [], Tenants: [],
     Residents: typeof RESIDENTS_STATIC_DATA !== 'undefined' ? RESIDENTS_STATIC_DATA : [],
+    Cheques:   [],
   });
   const [loading,             setLoading]             = useState(true);
   const [sidebarOpen,         setSidebarOpen]         = useState(true);
@@ -96,7 +97,7 @@ function App() {
       const results = await Promise.all([
         api.list.Directory(), api.list.Notices(), api.list.Issues(), api.list.Transactions(),
         api.list.Documents(), api.list.Voters(), api.list.OpeningBalances(),
-        api.list.ChartOfAccounts(), api.list.Tenants(), api.list.Residents()
+        api.list.ChartOfAccounts(), api.list.Tenants(), api.list.Residents(), api.list.Cheques()
       ]);
       setData({
         Directory:       results[0]?.rows || [],
@@ -109,6 +110,7 @@ function App() {
         ChartOfAccounts: results[7]?.rows || [],
         Tenants:         results[8]?.rows || [],
         Residents:       results[9]?.rows?.length  ? results[9].rows  : (typeof RESIDENTS_STATIC_DATA !== 'undefined' ? RESIDENTS_STATIC_DATA : []),
+        Cheques:         results[10]?.rows || [],
       });
     } catch (e) { showToast('Failed to load data', 'error'); }
     finally     { setLoading(false); }
@@ -242,7 +244,7 @@ function App() {
             <Dashboard data={data} onNavigate={setView} isAdmin={isAdmin} />
           ) : view === 'Cheques' ? (
             isAdmin
-              ? <ChequesPage />
+              ? <ChequesPage gasData={data.Cheques} onDataChange={rows => setData(prev => ({...prev, Cheques: rows}))} />
               : <AccessDenied />
           ) : view === 'Residents' ? (
             isAdmin
