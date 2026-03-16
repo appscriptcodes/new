@@ -1,51 +1,58 @@
 /* ===================================================
    ChequesPage.js — Cheques Module (Admin Only)
    Data source: Google Sheets "Cheques" tab via GAS
-   All reads/writes go directly to the backend.
+   State is owned by App.js — no re-fetch on nav.
    =================================================== */
 
-// ── Column mapping helpers ────────────────────────────
-// Maps our internal keys to the GAS sheet column headers
-const CHQ_COL = {
-  sr:        'SR.NO.',
-  date:      'DATE',
-  party:     'PARTY',
-  purpose:   'PURPOSE',
-  amount:    'AMOUNT',
-  billDate:  'BILL DATE',
-  invoiceNo: 'INVOICE NO.',
-  chequeNo:  'CHEQUE NO.',
-  remarks:   'REMARKS',
-  clearedOn: 'Cleared on',
-};
-
-// Normalise a raw GAS row object into our internal shape
+// ── Normalise a raw GAS/Excel row into internal shape ─
+// Handles all column header variants (mixed case, spaces, etc.)
 function normCheque(raw) {
   if (!raw) return null;
-  // GAS returns rows with the sheet column names as keys
-  // Handle both formats: our camelCase (from previous sessions) and raw sheet headers
-  return {
-    sr:        String(raw['SR.NO.'] ?? raw.sr         ?? ''),
-    date:      String(raw['DATE']   ?? raw.date       ?? ''),
-    party:     String(raw['PARTY']  ?? raw.party      ?? '').trim(),
-    purpose:   String(raw['PURPOSE']?? raw.purpose    ?? '').trim(),
-    amount:    Number(raw['AMOUNT'] ?? raw.amount     ?? 0),
-    billDate:  String(raw['BILL DATE']    ?? raw.billDate  ?? ''),
-    invoiceNo: String(raw['INVOICE NO.']  ?? raw.invoiceNo ?? ''),
-    chequeNo:  String(raw['CHEQUE NO.']   ?? raw.chequeNo  ?? '').replace(/\.0$/, ''),
-    remarks:   String(raw['REMARKS']      ?? raw.remarks   ?? '').trim(),
-    clearedOn: String(raw['Cleared on']   ?? raw.clearedOn ?? ''),
+  // Helper: try multiple key variants
+  const get = (...keys) => {
+    for (const k of keys) {
+      const v = raw[k];
+      if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
+    }
+    return '';
   };
+
+  const remarks = get('REMARKS', 'Remarks', 'remarks', 'Status', 'status');
+  const party   = get('PARTY',   'Party',   'party', 'Vendor', 'Payee');
+
+  if (!party) return null; // skip blank rows
+
+  return {
+    sr:        get('SR.NO.', 'SR NO', 'Sr.No.', 'sr', 'Serial', 'No'),
+    date:      get('DATE', 'Date', 'date'),
+    party,
+    purpose:   get('PURPOSE', 'Purpose', 'purpose', 'Description', 'Narration'),
+    amount:    Number(String(get('AMOUNT', 'Amount', 'amount') || '0').replace(/[₹,\s]/g, '')) || 0,
+    billDate:  get('BILL DATE', 'Bill Date', 'billDate', 'Bill Dt'),
+    invoiceNo: get('INVOICE NO.', 'Invoice No.', 'Invoice No', 'invoiceNo', 'Invoice', 'Bill No'),
+    chequeNo:  String(get('CHEQUE NO.', 'Cheque No.', 'Cheque No', 'chequeNo', 'Chq No', 'Check No')).replace(/\.0$/, ''),
+    remarks:   remarks,
+    clearedOn: get('CLEARED ON', 'Cleared on', 'Cleared On', 'clearedOn', 'Clear Date'),
+  };
+}
+
+// Determine display status for a cheque
+// GAS sheet uses: Paid, Cancel, blank (new/pending)
+function chequeStatus(row) {
+  const r = (row.remarks || '').trim();
+  if (r === 'Paid')   return 'Paid';
+  if (r === 'Cancel') return 'Cancel';
+  return 'Unpaid'; // blank or anything else = unpaid/pending
 }
 
 // ── Bulk Upload Modal ─────────────────────────────────
 function ChequesBulkUploadModal({ onClose, onImport }) {
   const { useState } = React;
-  const [file,        setFile]        = useState(null);
-  const [preview,     setPreview]     = useState([]);
-  const [mode,        setMode]        = useState('replace');
-  const [error,       setError]       = useState('');
-  const [processing,  setProcessing]  = useState(false);
+  const [file,       setFile]       = useState(null);
+  const [preview,    setPreview]    = useState([]);
+  const [mode,       setMode]       = useState('replace');
+  const [error,      setError]      = useState('');
+  const [processing, setProcessing] = useState(false);
 
   const FIELD_MAP = {
     sr:        ['sr.no.','sr no','sr','no','serial'],
@@ -57,7 +64,7 @@ function ChequesBulkUploadModal({ onClose, onImport }) {
     invoiceNo: ['invoice no.','invoice no','invoice','bill no','bill no.'],
     chequeNo:  ['cheque no.','cheque no','cheque','chq no','check no'],
     remarks:   ['remarks','status','remark'],
-    clearedOn: ['cleared on','clear date','clearing date'],
+    clearedOn: ['cleared on','clear date','clearing date','cleared on'],
   };
 
   function detectMapping(cols) {
@@ -95,7 +102,10 @@ function ChequesBulkUploadModal({ onClose, onImport }) {
       }
       const num = parseFloat(String(obj.amount || '0').replace(/[₹,\s]/g, ''));
       obj.amount = isNaN(num) ? 0 : num;
-      if (obj.chequeNo) { const n = parseFloat(obj.chequeNo); if (!isNaN(n)) obj.chequeNo = String(Math.round(n)); }
+      if (obj.chequeNo) {
+        const n = parseFloat(obj.chequeNo);
+        if (!isNaN(n)) obj.chequeNo = String(Math.round(n));
+      }
       return obj;
     }).filter(o => o.party || o.date);
   }
@@ -113,14 +123,12 @@ function ChequesBulkUploadModal({ onClose, onImport }) {
       } else if (ext === 'xlsx' || ext === 'xls') {
         if (typeof XLSX === 'undefined') throw new Error('Excel library not loaded.');
         const buf  = await f.arrayBuffer();
-        const wb   = XLSX.read(buf, { type: 'array', cellDates: true });
-        const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' });
+        const wb   = XLSX.read(buf, { type: 'array', cellDates: false });
+        const ws   = wb.Sheets[wb.SheetNames[0]];
+        const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false });
         if (data.length < 2) throw new Error('Sheet appears empty.');
         hdrs    = data[0].map(String);
-        rawRows = data.slice(1).map(r => r.map(v => {
-          if (v instanceof Date) return v.toLocaleDateString('en-GB').replace(/\//g, '-');
-          return String(v ?? '');
-        }));
+        rawRows = data.slice(1).map(r => r.map(v => String(v ?? '').trim()));
       } else {
         throw new Error('Unsupported file. Please upload .csv, .xlsx or .xls');
       }
@@ -138,13 +146,13 @@ function ChequesBulkUploadModal({ onClose, onImport }) {
       <div className="modal-content" onClick={e => e.stopPropagation()} style={{maxWidth:'680px'}}>
         <div className="p-5 border-b border-gray-200">
           <h3 className="text-lg font-semibold text-gray-900">Bulk Import Cheques</h3>
-          <p className="text-sm text-gray-500 mt-0.5">Upload a CSV or Excel — rows are saved directly to the Google Sheet.</p>
+          <p className="text-sm text-gray-500 mt-0.5">Upload your billing Excel/CSV — data saves to Google Sheet.</p>
         </div>
         <div className="p-5 space-y-5">
           <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-xs text-blue-800 space-y-1">
-            <p className="font-semibold">Expected columns (any order):</p>
-            <p className="font-mono">SR.NO. · DATE · PARTY · PURPOSE · AMOUNT · BILL DATE · INVOICE NO. · CHEQUE NO. · REMARKS · Cleared on</p>
-            <p className="text-blue-600 mt-1">Column names are auto-detected — minor variations are handled.</p>
+            <p className="font-semibold">Expected columns (any order, any case):</p>
+            <p className="font-mono">SR.NO. · DATE · PARTY · PURPOSE · AMOUNT · BILL DATE · INVOICE NO. · CHEQUE NO. · REMARKS · CLEARED ON</p>
+            <p className="text-blue-600 mt-1">Column names auto-detected. Accepts "Paid", "Cancel", or blank for REMARKS.</p>
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Select File</label>
@@ -185,7 +193,11 @@ function ChequesBulkUploadModal({ onClose, onImport }) {
                         <td className="px-3 py-1.5 font-medium text-gray-800 whitespace-nowrap">{INR.format(row.amount)}</td>
                         <td className="px-3 py-1.5">{row.chequeNo}</td>
                         <td className="px-3 py-1.5">
-                          <span className={`status-badge ${row.remarks === 'Paid' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>{row.remarks || '-'}</span>
+                          <span className={`status-badge text-xs ${
+                            chequeStatus(row) === 'Paid'   ? 'bg-green-100 text-green-700' :
+                            chequeStatus(row) === 'Cancel' ? 'bg-gray-100 text-gray-600' :
+                            'bg-orange-100 text-orange-700'
+                          }`}>{row.remarks || 'Unpaid'}</span>
                         </td>
                       </tr>
                     ))}
@@ -202,8 +214,8 @@ function ChequesBulkUploadModal({ onClose, onImport }) {
               <label className="block text-sm font-medium text-gray-700 mb-2">Import Mode</label>
               <div className="grid grid-cols-2 gap-3">
                 {[
-                  { val: 'replace', title: 'Replace All',    desc: 'Clear the Google Sheet and write only the imported rows.' },
-                  { val: 'merge',   title: 'Merge / Append', desc: 'Keep existing rows; add only new cheque numbers from file.' },
+                  { val: 'replace', title: 'Replace All',    desc: 'Clear the sheet and write only the imported rows.' },
+                  { val: 'merge',   title: 'Merge / Append', desc: 'Keep existing rows; add new cheque numbers.' },
                 ].map(({ val, title, desc }) => (
                   <label key={val} className={`flex items-start gap-3 p-3 rounded-xl border-2 cursor-pointer transition-all ${mode === val ? 'border-blue-400 bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`}>
                     <input type="radio" name="mode" value={val} checked={mode === val} onChange={() => setMode(val)} className="mt-0.5 accent-blue-500" />
@@ -285,10 +297,11 @@ function ChequeFormModal({ row, nextSr, onClose, onSave }) {
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-700 mb-1">Status</label>
-              <select value={form.remarks} onChange={e => { set('remarks', e.target.value); if (e.target.value === 'Unpaid') set('clearedOn', ''); }}
+              <select value={form.remarks} onChange={e => { set('remarks', e.target.value); if (e.target.value !== 'Paid') set('clearedOn', ''); }}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
                 <option value="Unpaid">Unpaid</option>
                 <option value="Paid">Paid</option>
+                <option value="Cancel">Cancelled</option>
               </select>
             </div>
             <div>
@@ -304,8 +317,8 @@ function ChequeFormModal({ row, nextSr, onClose, onSave }) {
             <div className="col-span-2">
               <label className="block text-xs font-medium text-gray-700 mb-1">Cleared On</label>
               <input type="text" value={form.clearedOn} onChange={e => set('clearedOn', e.target.value)}
-                placeholder="DD-MM-YYYY (leave blank if not cleared)"
-                disabled={form.remarks === 'Unpaid'}
+                placeholder="DD-MM-YYYY"
+                disabled={form.remarks !== 'Paid'}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm disabled:bg-gray-50 disabled:text-gray-400" />
             </div>
           </div>
@@ -343,15 +356,16 @@ function ChequeViewModal({ row, onClose }) {
     ['Bill Date',  row.billDate || '-'],
     ['Invoice No.',row.invoiceNo || '-'],
     ['Cheque No.', row.chequeNo],
-    ['Status',     row.remarks],
+    ['Status',     row.remarks || '-'],
     ['Cleared On', row.clearedOn || '-'],
   ];
+  const status = chequeStatus(row);
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content" onClick={e => e.stopPropagation()} style={{maxWidth:'460px'}}>
         <div className="p-5 border-b border-gray-200 flex items-center gap-3">
-          <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${row.remarks === 'Paid' ? 'bg-green-100' : 'bg-orange-100'}`}>
-            <svg className={`w-5 h-5 ${row.remarks === 'Paid' ? 'text-green-600' : 'text-orange-600'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${status === 'Paid' ? 'bg-green-100' : status === 'Cancel' ? 'bg-gray-100' : 'bg-orange-100'}`}>
+            <svg className={`w-5 h-5 ${status === 'Paid' ? 'text-green-600' : status === 'Cancel' ? 'text-gray-500' : 'text-orange-600'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
             </svg>
           </div>
@@ -365,7 +379,12 @@ function ChequeViewModal({ row, onClose }) {
             {fields.map(([label, value]) => (
               <div key={label} className="flex justify-between gap-4">
                 <dt className="text-sm text-gray-500">{label}</dt>
-                <dd className={`text-sm font-medium text-right ${value === 'Paid' ? 'text-green-600' : value === 'Unpaid' ? 'text-orange-600' : label === 'Amount' ? 'text-gray-900 text-base' : 'text-gray-700'}`}>{value}</dd>
+                <dd className={`text-sm font-medium text-right ${
+                  value === 'Paid'   ? 'text-green-600' :
+                  value === 'Cancel' ? 'text-gray-500' :
+                  value === 'Unpaid' ? 'text-orange-600' :
+                  label === 'Amount' ? 'text-gray-900 text-base' : 'text-gray-700'
+                }`}>{value}</dd>
               </div>
             ))}
           </dl>
@@ -392,13 +411,16 @@ function ChqBar({ label, value, max, color, formatted }) {
 }
 
 // ── Main Page ─────────────────────────────────────────
-function ChequesPage() {
+// gasData: rows from GAS (owned by App.js, survives navigation)
+// onDataChange: callback to update App.js state after import/add/edit
+function ChequesPage({ gasData, onDataChange }) {
   const { useState, useMemo, useCallback, useEffect } = React;
 
-  // ── State ──────────────────────────────────────────
-  const [data,            setData]            = useState([]);
-  const [loading,         setLoading]         = useState(true);
-  const [saving,          setSaving]          = useState(false);
+  // Local display data = normalised gasData
+  const data = useMemo(() => {
+    return (gasData || []).map(normCheque).filter(Boolean);
+  }, [gasData]);
+
   const [search,          setSearch]          = useState('');
   const [statusFilter,    setStatusFilter]    = useState('all');
   const [partyFilter,     setPartyFilter]     = useState('all');
@@ -407,40 +429,27 @@ function ChequesPage() {
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [viewRow,         setViewRow]         = useState(null);
   const [editRow,         setEditRow]         = useState(null);
+  const [saving,          setSaving]          = useState(false);
 
-  // ── Fetch from GAS ────────────────────────────────
-  async function fetchCheques() {
-    setLoading(true);
-    try {
-      const res = await api.list.Cheques();
-      const rows = (res?.rows || []).map(normCheque).filter(r => r && r.party);
-      setData(rows);
-    } catch (e) {
-      showToast('Could not load cheques: ' + e.message, 'error');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  // Fetch on mount
-  useEffect(() => { fetchCheques(); }, []);
-
-  // ── Stats ─────────────────────────────────────────
+  // ── Stats — counts by actual status ──────────────
   const stats = useMemo(() => {
-    const paid     = data.filter(r => r.remarks === 'Paid');
-    const unpaid   = data.filter(r => r.remarks === 'Unpaid');
+    const paid     = data.filter(r => chequeStatus(r) === 'Paid');
+    const unpaid   = data.filter(r => chequeStatus(r) === 'Unpaid');
+    const cancelled= data.filter(r => chequeStatus(r) === 'Cancel');
     const totalAmt = data.reduce((s, r) => s + (Number(r.amount) || 0), 0);
     return {
-      total: data.length, paid: paid.length, unpaid: unpaid.length,
+      total: data.length,
+      paid: paid.length, unpaid: unpaid.length, cancelled: cancelled.length,
       totalAmt,
-      paidAmt:   paid.reduce((s,r) => s + (Number(r.amount)||0), 0),
-      unpaidAmt: unpaid.reduce((s,r) => s + (Number(r.amount)||0), 0),
+      paidAmt:   paid.reduce((s,r) => s+(Number(r.amount)||0), 0),
+      unpaidAmt: unpaid.reduce((s,r) => s+(Number(r.amount)||0), 0),
     };
   }, [data]);
 
   const partyStats = useMemo(() => {
     const map = {};
     data.forEach(r => {
+      if (chequeStatus(r) === 'Cancel') return; // exclude cancelled from party totals
       const p = (r.party || 'Unknown').trim();
       if (!map[p]) map[p] = { count: 0, total: 0 };
       map[p].count++; map[p].total += Number(r.amount) || 0;
@@ -451,6 +460,7 @@ function ChequesPage() {
   const purposeStats = useMemo(() => {
     const map = {};
     data.forEach(r => {
+      if (chequeStatus(r) === 'Cancel') return;
       const p = (r.purpose || 'Unknown').trim().slice(0, 45);
       if (!map[p]) map[p] = { count: 0, total: 0 };
       map[p].count++; map[p].total += Number(r.amount) || 0;
@@ -462,8 +472,10 @@ function ChequesPage() {
 
   const filtered = useMemo(() => {
     let rows = data;
-    if (statusFilter !== 'all') rows = rows.filter(r => r.remarks === statusFilter);
-    if (partyFilter  !== 'all') rows = rows.filter(r => r.party === partyFilter);
+    if (statusFilter === 'Paid')    rows = rows.filter(r => chequeStatus(r) === 'Paid');
+    if (statusFilter === 'Unpaid')  rows = rows.filter(r => chequeStatus(r) === 'Unpaid');
+    if (statusFilter === 'Cancel')  rows = rows.filter(r => chequeStatus(r) === 'Cancel');
+    if (partyFilter !== 'all') rows = rows.filter(r => r.party === partyFilter);
     if (search.trim()) {
       const q = search.toLowerCase();
       rows = rows.filter(r =>
@@ -476,64 +488,100 @@ function ChequesPage() {
 
   const nextSr = useMemo(() => (data.length ? Math.max(...data.map(r=>parseInt(r.sr)||0)) : 0) + 1, [data]);
 
-  // ── Handlers (write to GAS → re-fetch) ────────────
+  // ── Refresh from GAS ──────────────────────────────
+  async function fetchCheques() {
+    setSaving(true);
+    try {
+      const res = await api.list.Cheques();
+      const rows = res?.rows || [];
+      onDataChange(rows); // update App.js state — survives navigation
+      showToast('Cheques refreshed from Google Sheet', 'success');
+    } catch (e) {
+      showToast('Could not refresh: ' + e.message, 'error');
+    } finally { setSaving(false); }
+  }
+
+  // ── Handlers ──────────────────────────────────────
   const handleAdd = useCallback(async (formData) => {
     setSaving(true);
     try {
       await api.createRow('Cheques', formData);
+      const res = await api.list.Cheques();
+      onDataChange(res?.rows || []);
       showToast('Cheque added to Google Sheet', 'success');
       setShowAddModal(false);
-      await fetchCheques();
     } catch (e) {
       showToast('Failed to add: ' + e.message, 'error');
     } finally { setSaving(false); }
-  }, []);
+  }, [onDataChange]);
 
   const handleEdit = useCallback(async (formData) => {
     setSaving(true);
     try {
       await api.upsertRow('Cheques', 'chequeNo', formData);
+      const res = await api.list.Cheques();
+      onDataChange(res?.rows || []);
       showToast('Cheque updated in Google Sheet', 'success');
       setEditRow(null);
-      await fetchCheques();
     } catch (e) {
       showToast('Failed to update: ' + e.message, 'error');
     } finally { setSaving(false); }
-  }, []);
+  }, [onDataChange]);
 
   const handleBulkImport = useCallback(async (rows, mode) => {
     setSaving(true);
     try {
-      // Post all rows to GAS in a single call using bulkImport op
-      await postPlain({ op: 'bulkImport', sheet: 'Cheques', mode, rows });
-      showToast(`Imported ${rows.length} rows to Google Sheet`, 'success');
-      await fetchCheques();
-    } catch (e) {
-      // GAS may not have bulkImport — fall back to sequential createRow calls
-      try {
-        if (mode === 'replace') {
-          // Clear sheet first via a dedicated op if available, otherwise ignore
-          try { await postPlain({ op: 'clearSheet', sheet: 'Cheques' }); } catch {}
-        }
-        const existing = new Set(data.map(r => r.chequeNo));
-        const toWrite  = mode === 'replace' ? rows : rows.filter(r => !existing.has(r.chequeNo));
-        // Write in small batches to avoid GAS timeout
-        const BATCH = 20;
-        for (let i = 0; i < toWrite.length; i += BATCH) {
-          await Promise.all(toWrite.slice(i, i + BATCH).map(r => api.createRow('Cheques', r).catch(()=>{})));
-        }
-        showToast(`Imported ${toWrite.length} rows (${mode} mode)`, 'success');
-        await fetchCheques();
-      } catch (e2) {
-        showToast('Import partially failed: ' + e2.message, 'error');
+      if (mode === 'replace') {
+        // Clear then write all rows
+        try { await postPlain({ op: 'clearSheet', sheet: 'Cheques' }); } catch {}
       }
+      const existing = new Set((gasData || []).map(r => {
+        const n = normCheque(r);
+        return n ? n.chequeNo : null;
+      }).filter(Boolean));
+      const toWrite = mode === 'replace' ? rows : rows.filter(r => !existing.has(r.chequeNo));
+
+      // Map back to sheet column names for GAS
+      const sheetRows = toWrite.map(r => ({
+        'SR.NO.':      r.sr,
+        'DATE':        r.date,
+        'PARTY':       r.party,
+        'PURPOSE':     r.purpose,
+        'AMOUNT':      r.amount,
+        'BILL DATE':   r.billDate,
+        'INVOICE NO.': r.invoiceNo,
+        'CHEQUE NO.':  r.chequeNo,
+        'REMARKS':     r.remarks,
+        'CLEARED ON':  r.clearedOn,
+      }));
+
+      // Batch write in groups of 20
+      const BATCH = 20;
+      for (let i = 0; i < sheetRows.length; i += BATCH) {
+        await Promise.all(sheetRows.slice(i, i + BATCH).map(r => api.createRow('Cheques', r).catch(() => {})));
+      }
+
+      // Re-fetch from GAS to confirm
+      const res = await api.list.Cheques();
+      onDataChange(res?.rows || []);
+      showToast(`Imported ${toWrite.length} rows to Google Sheet`, 'success');
+    } catch (e) {
+      showToast('Import failed: ' + e.message, 'error');
     } finally { setSaving(false); }
-  }, [data]);
+  }, [gasData, onDataChange]);
 
   const palette = ['#3b82f6','#10b981','#f59e0b','#8b5cf6','#ef4444','#06b6d4','#ec4899','#84cc16','#f97316','#14b8a6'];
 
-  // ── Loading state ─────────────────────────────────
-  if (loading) {
+  const statusBadge = (row) => {
+    const s = chequeStatus(row);
+    const cls = s === 'Paid'   ? 'bg-green-100 text-green-700' :
+                s === 'Cancel' ? 'bg-gray-100 text-gray-500' :
+                'bg-orange-100 text-orange-700';
+    return <span className={`status-badge ${cls}`}>{row.remarks || 'Unpaid'}</span>;
+  };
+
+  // Show spinner if no data yet and first load
+  if (!gasData) {
     return (
       <div className="flex flex-col items-center justify-center py-24 gap-4">
         <div className="spinner" style={{width:'36px',height:'36px',borderWidth:'3px'}} />
@@ -559,10 +607,9 @@ function ChequesPage() {
             </button>
           ))}
           <ExportButton data={filtered} filename="Cheques" />
-          {/* Refresh from sheet */}
-          <button onClick={fetchCheques} title="Refresh from Google Sheet"
-            className="bg-white hover:bg-gray-50 border border-gray-200 text-gray-600 p-2 rounded-lg transition-colors">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <button onClick={fetchCheques} disabled={saving} title="Refresh from Google Sheet"
+            className="bg-white hover:bg-gray-50 border border-gray-200 text-gray-600 p-2 rounded-lg transition-colors disabled:opacity-50">
+            <svg className={`w-4 h-4 ${saving ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
             </svg>
           </button>
@@ -589,8 +636,8 @@ function ChequesPage() {
           {label:'Total Cheques', display:stats.total,                 color:'#3b82f6', filter:null},
           {label:'Paid',          display:stats.paid,                  color:'#10b981', filter:'Paid'},
           {label:'Unpaid',        display:stats.unpaid,                color:'#ef4444', filter:'Unpaid'},
+          {label:'Cancelled',     display:stats.cancelled,             color:'#9ca3af', filter:'Cancel'},
           {label:'Total Amount',  display:INR.format(stats.totalAmt),  color:'#8b5cf6', filter:null},
-          {label:'Paid Amount',   display:INR.format(stats.paidAmt),   color:'#10b981', filter:null},
           {label:'Unpaid Amount', display:INR.format(stats.unpaidAmt), color:'#ef4444', filter:null},
         ].map(({label, display, color, filter}) => {
           const active = filter && statusFilter === filter;
@@ -616,19 +663,23 @@ function ChequesPage() {
               <h3 className="text-sm font-semibold text-gray-700 mb-5">Payment Status Overview</h3>
               <div className="space-y-4">
                 {[
-                  {label:`Paid (${stats.paid})`,   amt:stats.paidAmt,   color:'#10b981'},
-                  {label:`Unpaid (${stats.unpaid})`,amt:stats.unpaidAmt, color:'#f97316'},
+                  {label:`Paid (${stats.paid})`,      amt:stats.paidAmt,   color:'#10b981'},
+                  {label:`Unpaid (${stats.unpaid})`,  amt:stats.unpaidAmt, color:'#f97316'},
+                  {label:`Cancelled (${stats.cancelled})`, amt:0,           color:'#9ca3af'},
                 ].map(({label,amt,color}) => (
                   <div key={label}>
                     <div className="flex justify-between text-xs mb-1">
                       <span className="font-medium" style={{color}}>{label}</span>
-                      <span className="text-gray-500">{INR.format(amt)}</span>
+                      {amt > 0 && <span className="text-gray-500">{INR.format(amt)}</span>}
                     </div>
-                    <div className="h-6 bg-gray-100 rounded-full overflow-hidden">
-                      <div className="h-full rounded-full flex items-center justify-end pr-2 transition-all"
-                        style={{width:`${stats.totalAmt?(amt/stats.totalAmt)*100:0}%`, background:color}}>
+                    <div className="h-5 bg-gray-100 rounded-full overflow-hidden">
+                      <div className="h-full rounded-full flex items-center justify-end pr-2"
+                        style={{
+                          width: `${stats.total ? (label.startsWith('Paid') ? (stats.paid/stats.total)*100 : label.startsWith('Unpaid') ? (stats.unpaid/stats.total)*100 : (stats.cancelled/stats.total)*100) : 0}%`,
+                          background: color
+                        }}>
                         <span className="text-white text-xs font-medium">
-                          {stats.totalAmt?Math.round((amt/stats.totalAmt)*100):0}%
+                          {stats.total ? Math.round((label.startsWith('Paid') ? stats.paid : label.startsWith('Unpaid') ? stats.unpaid : stats.cancelled) / stats.total * 100) : 0}%
                         </span>
                       </div>
                     </div>
@@ -650,7 +701,7 @@ function ChequesPage() {
                     </div>
                   </div>
                   <div className="space-y-3">
-                    {[['Paid / Cleared','#10b981',stats.paid],['Unpaid / Pending','#f97316',stats.unpaid]].map(([l,c,v])=>(
+                    {[['Paid / Cleared','#10b981',stats.paid],['Unpaid / Pending','#f97316',stats.unpaid],['Cancelled','#9ca3af',stats.cancelled]].map(([l,c,v])=>(
                       <div key={l} className="flex items-center gap-2">
                         <div className="w-3 h-3 rounded-sm flex-shrink-0" style={{background:c}} />
                         <span className="text-xs text-gray-600">{l}</span>
@@ -661,7 +712,6 @@ function ChequesPage() {
                 </div>
               </div>
             </div>
-
             {/* Top parties */}
             <div className="bg-white rounded-xl p-5 shadow-sm">
               <h3 className="text-sm font-semibold text-gray-700 mb-4">Top Parties by Amount</h3>
@@ -701,7 +751,7 @@ function ChequesPage() {
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0">
                       <span className="text-xs font-semibold text-gray-700">{INR.format(Number(row.amount)||0)}</span>
-                      <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${row.remarks==='Paid'?'bg-green-100 text-green-700':'bg-orange-100 text-orange-700'}`}>{row.remarks}</span>
+                      {statusBadge(row)}
                     </div>
                   </div>
                 ))}
@@ -734,7 +784,8 @@ function ChequesPage() {
                 className="px-3 py-2 border border-gray-300 rounded-lg text-sm">
                 <option value="all">All Status</option>
                 <option value="Paid">Paid</option>
-                <option value="Unpaid">Unpaid</option>
+                <option value="Unpaid">Unpaid / Pending</option>
+                <option value="Cancel">Cancelled</option>
               </select>
               <select value={partyFilter} onChange={e=>setPartyFilter(e.target.value)}
                 className="px-3 py-2 border border-gray-300 rounded-lg text-sm max-w-48">
@@ -770,9 +821,7 @@ function ChequesPage() {
                     <td className="px-4 py-3 text-sm font-semibold text-gray-800 whitespace-nowrap">{INR.format(Number(row.amount)||0)}</td>
                     <td className="px-4 py-3 text-sm font-mono text-gray-700">{row.chequeNo}</td>
                     <td className="px-4 py-3 text-xs text-gray-500 max-w-[120px] truncate" title={row.invoiceNo}>{row.invoiceNo||'-'}</td>
-                    <td className="px-4 py-3">
-                      <span className={`status-badge ${row.remarks==='Paid'?'bg-green-100 text-green-700':'bg-orange-100 text-orange-700'}`}>{row.remarks}</span>
-                    </td>
+                    <td className="px-4 py-3">{statusBadge(row)}</td>
                     <td className="px-4 py-3 text-sm text-gray-500 whitespace-nowrap">{row.clearedOn||'-'}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
@@ -798,7 +847,7 @@ function ChequesPage() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
                 </svg>
                 <p className="text-sm font-medium">No cheques found</p>
-                <p className="text-xs mt-1">Adjust filters, add a cheque, or import a file.</p>
+                <p className="text-xs mt-1">Adjust filters or use the ⟳ button to refresh from Google Sheet.</p>
               </div>
             )}
           </div>
