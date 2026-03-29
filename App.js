@@ -93,27 +93,60 @@ function App() {
 
   async function refreshData() {
     setLoading(true);
+
+    /* Each call is wrapped in .catch(() => ({ rows: [] })) so a single
+       failing sheet never blocks the rest of the app from loading.     */
+    const safe = (p) => p.catch(e => { console.warn('API error:', e); return { rows: [] }; });
+
     try {
-      const results = await Promise.all([
-        api.list.Directory(), api.list.Notices(), api.list.Issues(), api.list.Transactions(),
-        api.list.Documents(), api.list.Voters(), api.list.OpeningBalances(),
-        api.list.ChartOfAccounts(), api.list.Tenants(), api.list.Residents(), api.list.Cheques()
+      const [
+        dirRes, notRes, issRes, txnRes,
+        docRes, votRes, obRes, coaRes,
+        tenRes, resRes, cheRes
+      ] = await Promise.all([
+        safe(api.list.Directory()),
+        safe(api.list.Notices()),
+        safe(api.list.Issues()),
+        safe(api.list.Transactions()),
+        safe(api.list.Documents()),
+        safe(api.list.Voters()),
+        safe(api.list.OpeningBalances()),
+        safe(api.list.ChartOfAccounts()),
+        safe(api.list.Tenants()),
+        safe(api.list.Residents()),
+        safe(api.list.Cheques()),
       ]);
+
+      /* Check if GAS returned an error payload (ok:false) */
+      const gasError = [dirRes, notRes, issRes, txnRes, docRes, votRes, obRes, coaRes, tenRes, cheRes]
+        .find(r => r && r.ok === false && r.error);
+      if (gasError) {
+        console.warn('GAS returned error:', gasError.error);
+        showToast('Backend warning: ' + gasError.error, 'error');
+      }
+
       setData({
-        Directory:       results[0]?.rows || [],
-        Notices:         results[1]?.rows || [],
-        Issues:          results[2]?.rows || [],
-        Transactions:    results[3]?.rows || [],
-        Documents:       results[4]?.rows || [],
-        Voters:          results[5]?.rows || [],
-        OpeningBalances: results[6]?.rows || [],
-        ChartOfAccounts: results[7]?.rows || [],
-        Tenants:         results[8]?.rows || [],
-        Residents:       results[9]?.rows?.length  ? results[9].rows  : (typeof RESIDENTS_STATIC_DATA !== 'undefined' ? RESIDENTS_STATIC_DATA : []),
-        Cheques:         results[10]?.rows || [],
+        Directory:       dirRes?.rows || [],
+        Notices:         notRes?.rows || [],
+        Issues:          issRes?.rows || [],
+        Transactions:    txnRes?.rows || [],
+        Documents:       docRes?.rows || [],
+        Voters:          votRes?.rows || [],
+        OpeningBalances: obRes?.rows  || [],
+        ChartOfAccounts: coaRes?.rows || [],
+        Tenants:         tenRes?.rows || [],
+        Residents:       resRes?.rows?.length
+          ? resRes.rows
+          : (typeof RESIDENTS_STATIC_DATA !== 'undefined' ? RESIDENTS_STATIC_DATA : []),
+        Cheques:         cheRes?.rows || [],
       });
-    } catch (e) { showToast('Failed to load data', 'error'); }
-    finally     { setLoading(false); }
+    } catch (e) {
+      /* Only hits here if Promise.all itself explodes (very unlikely now) */
+      console.error('refreshData fatal error:', e);
+      showToast('Failed to load data: ' + String(e), 'error');
+    } finally {
+      setLoading(false);
+    }
   }
 
   if (!session.token) {
@@ -324,46 +357,79 @@ function App() {
 
 function Boot() {
   const { useState, useEffect } = React;
-  const [status, setStatus] = useState('Testing connection...');
-  const [ok,     setOk]     = useState(false);
-  const [error,  setError]  = useState('');
+  const [status, setStatus] = useState('connecting');  // connecting | ok | error
+  const [errorMsg, setErrorMsg] = useState('');
 
-  useEffect(() => {
-    (async () => {
-      try   { await getJSON('testCors'); setOk(true); setStatus('Connection successful!'); }
-      catch (e) { console.error(e); setError(String(e)); setStatus('Connection failed'); }
-    })();
-  }, []);
+  function tryConnect() {
+    setStatus('connecting');
+    setErrorMsg('');
+    getJSON('testCors', {}, 15000)
+      .then(() => setStatus('ok'))
+      .catch(e => {
+        console.error('Boot CORS test failed:', e);
+        const msg = String(e);
+        /* If the GAS URL is simply missing, give a clear hint */
+        if (!GAS) {
+          setErrorMsg('No backend URL set. Add ?gas=YOUR_GAS_URL to the address bar, or set window.ENV_GAS_URL in index.html.');
+        } else {
+          setErrorMsg(msg);
+        }
+        setStatus('error');
+      });
+  }
 
-  if (error) return (
+  useEffect(() => { tryConnect(); }, []);
+
+  /* ── Connecting splash ── */
+  if (status === 'connecting') return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full text-center">
+        <div className="spinner mx-auto mb-4" />
+        <h2 className="text-xl font-semibold text-gray-900 mb-2">Connecting…</h2>
+        <p className="text-gray-500 text-sm break-all">{GAS || 'No GAS URL configured'}</p>
+      </div>
+    </div>
+  );
+
+  /* ── Error screen ── */
+  if (status === 'error') return (
     <div className="min-h-screen bg-gradient-to-br from-red-500 to-orange-600 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full">
         <div className="text-center mb-6">
           <div className="w-16 h-16 bg-red-100 rounded-full mx-auto mb-4 flex items-center justify-center">
             <svg className="w-8 h-8 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01M12 3a9 9 0 100 18A9 9 0 0012 3z" />
             </svg>
           </div>
-          <h2 className="text-xl font-semibold text-gray-900 mb-2">{status}</h2>
-          <p className="text-sm text-gray-600 mb-4">Unable to connect to backend</p>
+          <h2 className="text-xl font-semibold text-gray-900 mb-1">Connection Failed</h2>
+          <p className="text-sm text-gray-500 mb-4">Could not reach the Google Apps Script backend.</p>
         </div>
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
-          <p className="text-sm text-red-800 font-mono break-all">{error}</p>
-        </div>
-        <button onClick={() => window.location.reload()}
-          className="w-full bg-blue-500 hover:bg-blue-600 text-white font-medium py-3 rounded-lg transition-colors">
-          Retry Connection
-        </button>
-      </div>
-    </div>
-  );
 
-  if (!ok) return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full text-center">
-        <div className="spinner mx-auto mb-4" />
-        <h2 className="text-xl font-semibold text-gray-900 mb-2">{status}</h2>
-        <p className="text-gray-600 text-sm">Please wait...</p>
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-5">
+          <p className="text-xs font-mono text-red-800 break-all">{errorMsg}</p>
+        </div>
+
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-5 text-sm text-amber-900 space-y-1">
+          <p className="font-semibold">Common fixes:</p>
+          <ul className="list-disc list-inside space-y-1 text-xs">
+            <li>Redeploy GAS as <strong>Execute as: Me</strong>, access: <strong>Anyone</strong></li>
+            <li>Check the GAS URL in <code>index.html</code> → <code>window.ENV_GAS_URL</code></li>
+            <li>Open the GAS URL directly in browser to confirm it responds</li>
+            <li>Make sure <code>doGet</code> handles <code>?action=testCors</code></li>
+          </ul>
+        </div>
+
+        <div className="flex gap-3">
+          <button onClick={tryConnect}
+            className="flex-1 bg-blue-500 hover:bg-blue-600 text-white font-medium py-3 rounded-lg transition-colors">
+            Retry
+          </button>
+          {/* Allow proceeding anyway — data will load empty but app is usable */}
+          <button onClick={() => setStatus('ok')}
+            className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium py-3 rounded-lg transition-colors">
+            Continue Anyway
+          </button>
+        </div>
       </div>
     </div>
   );
