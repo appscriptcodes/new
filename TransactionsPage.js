@@ -7,26 +7,38 @@
 /* ── Auto-categoriser based on narration patterns ── */
 function autoCategory(narration, type) {
   const n = (narration || '').toUpperCase();
-  if (n.includes('EASEBUZZ') || n.includes('MAINTENANCE') || n.includes('MAINTENENCE')) return 'Maintenance';
-  if (n.includes('NEFT') && type === 'Credit') return 'NEFT Credit';
-  if (n.includes('NEFT') && type === 'Debit')  return 'NEFT Debit';
-  if (n.includes('UPI') && type === 'Credit')  return 'UPI Receipt';
-  if (n.includes('UPI') && type === 'Debit')   return 'UPI Payment';
-  if (n.includes('CHQ') || n.includes('CHEQUE')) return 'Cheque';
-  if (n.includes('IMPS')) return 'IMPS';
-  if (n.includes('RTGS')) return 'RTGS';
-  if (n.includes('FT'))   return 'Fund Transfer';
-  if (n.includes('ATM'))  return 'ATM';
-  if (n.includes('SALARY') || n.includes('SAL')) return 'Salary';
-  if (n.includes('ELECTRICITY') || n.includes('ELEC') || n.includes('BESCOM') || n.includes('MSEB')) return 'Electricity';
-  if (n.includes('WATER')) return 'Water';
-  if (n.includes('SECURITY') || n.includes('GUARD')) return 'Security';
-  if (n.includes('REPAIR') || n.includes('MAINTAIN')) return 'Repairs';
-  if (n.includes('INSURANCE')) return 'Insurance';
-  if (n.includes('AUDIT') || n.includes('CA ') || n.includes('ACCOUNTING')) return 'Audit/Accounting';
-  if (n.includes('OWNERSHIP') || n.includes('TRANSFER')) return 'Ownership Transfer';
-  if (n.includes('INTEREST')) return 'Interest';
-  return type === 'Credit' ? 'Other Income' : 'Other Expense';
+  // Credits
+  if (type === 'Credit') {
+    if (n.includes('EASEBUZZ'))                        return 'Maintenance Collection';
+    if (n.includes('MOVE IN') || n.includes('MOVE OUT')) return 'Move In/Out Charges';
+    if (n.includes('OWNERSHIP') || n.includes('OWNERSHIP CHANGE')) return 'Ownership Transfer';
+    if (n.includes('ADVANCE MAIN') || n.includes('ADVANCE MAINTEN')) return 'Advance Maintenance';
+    if (n.includes('CHQ RET') || n.includes('I/W CHQ RET'))  return 'Cheque Return';
+    if (n.includes('VKM'))                             return 'VKM Transfer';
+    if (n.includes('UPI'))                             return 'UPI Receipt';
+    if (n.includes('NEFT'))                            return 'NEFT Receipt';
+    if (n.includes('IMPS'))                            return 'IMPS Receipt';
+    if (n.includes('RTGS'))                            return 'RTGS Receipt';
+    if (n.includes('FT') && n.includes('CR'))          return 'Fund Transfer In';
+    return 'Other Income';
+  }
+  // Debits
+  if (n.includes('ENVIRO'))                            return 'Housekeeping (Enviro)';
+  if (n.includes('TEAMWORKS') || n.includes('TEAM WORKS')) return 'Security (TeamWorks)';
+  if (n.includes('DHBVN') || n.includes('BIJLI VITRAN')) return 'Electricity (DHBVN)';
+  if (n.includes('CHQ RETURN CHGS'))                   return 'Bank Charges';
+  if (n.includes('CHQ PAID') || n.includes('CTS'))     return 'Cheque Payment';
+  if (n.includes('PAWAN') || n.includes('SANDEEP'))    return 'Petty Cash';
+  if (n.includes('RTGS DR'))                           return 'RTGS Payment';
+  if (n.includes('FT - DR') || (n.includes('FT') && n.includes('DR'))) return 'Fund Transfer Out';
+  if (n.includes('NEFT'))                              return 'NEFT Payment';
+  if (n.includes('UPI'))                               return 'UPI Payment';
+  if (n.includes('IMPS'))                              return 'IMPS Payment';
+  if (n.includes('ATM'))                               return 'ATM';
+  if (n.includes('ELECTRICITY') || n.includes('ELEC')) return 'Electricity';
+  if (n.includes('REPAIR') || n.includes('MAINTAIN'))  return 'Repairs & Maintenance';
+  if (n.includes('INTEREST'))                          return 'Interest';
+  return 'Other Expense';
 }
 
 /* ── Date normaliser: "29/11/25" or "29/11/2025" → "2025-11-29" ── */
@@ -465,7 +477,7 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
 
             {/* Tabs */}
             <div className="flex bg-gray-100 rounded-lg p-1 gap-1">
-              {[['table','Transactions'],['analytics','Analytics']].map(([id,label]) => (
+              {[['table','Transactions'],['analytics','Analytics'],['reconciliation','Reconciliation']].map(([id,label]) => (
                 <button key={id} onClick={() => setTab(id)}
                   className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${tab===id?'bg-white text-gray-900 shadow-sm':'text-gray-500 hover:text-gray-700'}`}>
                   {label}
@@ -504,7 +516,11 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
         </div>
 
         {/* ── Content ── */}
-        {tab === 'analytics' ? (
+        {tab === 'reconciliation' ? (
+          <div className="p-4">
+            <ChequeReconciliation data={data} />
+          </div>
+        ) : tab === 'analytics' ? (
           <div className="p-4">
             <TransactionAnalytics data={data} />
           </div>
@@ -754,6 +770,292 @@ function ImportPreviewModal({ step, rows, progress, error, onClear, onAppend, on
             </button>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+
+/* ═══════════════════════════════════════════════════════════
+   ChequeReconciliation Panel
+   Matches cheque register vs bank statement debits
+   ═══════════════════════════════════════════════════════════ */
+function ChequeReconciliation({ data }) {
+  const { useState, useMemo } = React;
+  const [filter, setFilter] = useState('all'); // all | matched | unmatched | bounced | cancelled
+
+  // ── Extract cheque-related debits from bank data ──────────
+  const bankDebits = useMemo(() => {
+    return data.filter(t => {
+      const wd = Number(t['Withdrawal Amt'] || (t.Type === 'Debit' ? t.Amount : 0) || 0);
+      return wd > 0;
+    }).map(t => {
+      const ref = (t['Chq/Ref No'] || '').replace(/^0+/, '') || '';
+      return {
+        date: t.Date || '',
+        narration: t.Narration || t.Description || '',
+        ref,
+        amount: Number(t['Withdrawal Amt'] || (t.Type === 'Debit' ? t.Amount : 0) || 0),
+        closing: Number(t['Closing Balance'] || 0),
+      };
+    });
+  }, [data]);
+
+  // ── Embedded cheque register (from the uploaded billing sheet) ─
+  // These are the 61 cheques from Billing_RWA - hardcoded from reconciliation analysis
+  const CHEQUES = [
+    {sr:1,chq:'680',party:'Enviro facility',purpose:'Technical & H.K team Bill',amount:684753,date:'09-Jan-2026',status:'Paid',clearedOn:'15-Jan-2026'},
+    {sr:2,chq:'690',party:'Petty Cash',purpose:'Tea Expenses & internal material',amount:63047,date:'08-Jan-2026',status:'Paid',clearedOn:'15-Jan-2026'},
+    {sr:3,chq:'684',party:'Inn4smart Solutions',purpose:'Sub Meter AMC',amount:79863,date:'08-Jan-2026',status:'Paid',clearedOn:'21-Jan-2026'},
+    {sr:4,chq:'685',party:'Kamal Motors',purpose:'Diesel Purchasing',amount:73354,date:'08-Jan-2026',status:'Paid',clearedOn:'20-Jan-2026'},
+    {sr:5,chq:'683',party:'R.P Enterpises',purpose:'Garbage Collection',amount:37760,date:'08-Jan-2026',status:'Paid',clearedOn:'17-Jan-2026'},
+    {sr:6,chq:'687',party:'AS Constructions',purpose:'Main Road repair work',amount:17680,date:'08-Jan-2026',status:'Paid',clearedOn:'15-Jan-2026'},
+    {sr:7,chq:'688',party:'Taj Electricals',purpose:'Submer cible Repair Work',amount:12190,date:'08-Jan-2026',status:'Paid',clearedOn:'19-Jan-2026'},
+    {sr:8,chq:'692',party:'Park smart Technologetes',purpose:'Boom Barrier Entry Exit',amount:42480,date:'09-Jan-2026',status:'Paid',clearedOn:'16-Jan-2026'},
+    {sr:9,chq:'689',party:'Shiwaji Petro',purpose:'Diesel Purchasing',amount:54562,date:'08-Jan-2026',status:'Paid',clearedOn:'15-Jan-2026'},
+    {sr:10,chq:'694',party:'Team Works',purpose:'Security',amount:337150,date:'09-Jan-2026',status:'Paid',clearedOn:'13-Jan-2026'},
+    {sr:11,chq:'682',party:'DPS Electricals',purpose:'1500 kva Transformer Rent',amount:103840,date:'08-Jan-2026',status:'Paid',clearedOn:'14-Jan-2026'},
+    {sr:12,chq:'698',party:'DHBVN Monthly Electricity',purpose:'DHBVN Monthly Electricity',amount:617432,date:'18-Jan-2026',status:'Paid',clearedOn:'19-Jan-2026'},
+    {sr:13,chq:'697',party:'Petty Cash',purpose:'Internal material & Laisoning',amount:20000,date:'15-Jan-2026',status:'Paid',clearedOn:'17-Jan-2026'},
+    {sr:14,chq:'699',party:'Enviro facility',purpose:'Technical & H.K team Bill',amount:651849,date:'30-Jan-2026',status:'Paid',clearedOn:'02-Feb-2026'},
+    {sr:15,chq:'695',party:'No Broker Technologies',purpose:'Main Gate 02 New Device',amount:8000,date:'13-Jan-2026',status:'Paid',clearedOn:'21-Feb-2026'},
+    {sr:16,chq:'701',party:'Petty Cash',purpose:'Internal material & Republic day',amount:59500,date:'30-Jan-2026',status:'Paid',clearedOn:'02-Feb-2026'},
+    {sr:17,chq:'709',party:'Shree shyam enterprises',purpose:'Fire Extingusher Rifiling',amount:126565,date:'09-Feb-2026',status:'Paid',clearedOn:'02-Dec-2026'},
+    {sr:18,chq:'708',party:'VC Enterprises',purpose:'Camera Reaparing',amount:1180,date:'09-Feb-2026',status:'Paid',clearedOn:'07-Mar-2026'},
+    {sr:19,chq:'707',party:'Inn4smart Solutions',purpose:'Sub Meter AMC',amount:26621,date:'09-Feb-2026',status:'Paid',clearedOn:'27-Feb-2026'},
+    {sr:20,chq:'706',party:'AS Constructions',purpose:'Main gate chamber repairing',amount:5896,date:'09-Feb-2026',status:'Paid',clearedOn:'16-Feb-2026'},
+    {sr:21,chq:'705',party:'Kamal Motors',purpose:'Diesel Purchasing',amount:69016,date:'09-Feb-2026',status:'Paid',clearedOn:'23-Feb-2026'},
+    {sr:22,chq:'704',party:'R.P Enterpises',purpose:'Garbage Collection',amount:18880,date:'09-Feb-2026',status:'Bounced',clearedOn:''},
+    {sr:23,chq:'710',party:'L.S Enterprises',purpose:'H.T VCB Repair',amount:0,date:'09-Feb-2026',status:'Cancel',clearedOn:''},
+    {sr:24,chq:'703',party:'Petty Cash',purpose:'Internal material & Laisoning',amount:53389,date:'09-Feb-2026',status:'Paid',clearedOn:'11-Feb-2026'},
+    {sr:25,chq:'711',party:'Petty Cash',purpose:'Advance for STP',amount:45000,date:'10-Feb-2026',status:'Paid',clearedOn:'02-Nov-2026'},
+    {sr:26,chq:'712',party:'DHBVN Monthly Electricity',purpose:'DHBVN Monthly Electricity',amount:743111,date:'10-Feb-2026',status:'Paid',clearedOn:'02-Dec-2026'},
+    {sr:27,chq:'713',party:'VC Enterprises',purpose:'Camera Reaparing',amount:10986,date:'10-Feb-2026',status:'Paid',clearedOn:'07-Mar-2026'},
+    {sr:28,chq:'715',party:'L.S Enterprises',purpose:'H.T VCB Repair',amount:28674,date:'12-Feb-2026',status:'Paid',clearedOn:'16-Feb-2026'},
+    {sr:29,chq:'716',party:'Team Works',purpose:'Security',amount:330986,date:'17-Feb-2026',status:'Paid',clearedOn:'18-Feb-2026'},
+    {sr:30,chq:'717',party:'Sun Power Company',purpose:'D.G Service 125kva',amount:51687,date:'18-Feb-2026',status:'Paid',clearedOn:'24-Feb-2026'},
+    {sr:31,chq:'718',party:'Shahrukh',purpose:'Fire Exit staire case Welding',amount:28500,date:'21-Feb-2026',status:'Paid',clearedOn:'23-Feb-2026'},
+    {sr:32,chq:'722',party:'A.S Enterprises',purpose:'L.T Room Pillar make work',amount:4816,date:'25-Feb-2026',status:'Paid',clearedOn:'07-Mar-2026'},
+    {sr:33,chq:'719',party:'Bala Ji Cement Store',purpose:'HDPE Black Pipe line purchase',amount:10800,date:'25-Feb-2026',status:'Paid',clearedOn:'02-Mar-2026'},
+    {sr:34,chq:'726',party:'Shri Ganpati pipes & Tools',purpose:'Plumbing material purchase',amount:43576,date:'26-Feb-2026',status:'Paid',clearedOn:'04-Mar-2026'},
+    {sr:35,chq:'724',party:'Petty Cash',purpose:'Internal material',amount:0,date:'26-Feb-2026',status:'Cancel',clearedOn:''},
+    {sr:36,chq:'725',party:'Petty Cash',purpose:'Internal material',amount:4751,date:'26-Feb-2026',status:'Paid',clearedOn:'02-Mar-2026'},
+    {sr:37,chq:'723',party:'Park smart Technologetes',purpose:'RFID Tags Expense',amount:70210,date:'26-Feb-2026',status:'Paid',clearedOn:'02-Mar-2026'},
+    {sr:38,chq:'728',party:'S & V SWITCHGEARS',purpose:'1600 KVA Transformer Repair',amount:0,date:'28-Feb-2026',status:'Cancel',clearedOn:''},
+    {sr:39,chq:'729',party:'DPS Electricals',purpose:'1500 kva Transformer Rent',amount:0,date:'28-Feb-2026',status:'Cancel',clearedOn:''},
+    {sr:40,chq:'730',party:'DPS Electricals',purpose:'1500 kva Transformer Rent',amount:0,date:'01-Mar-2026',status:'Bounced',clearedOn:''},
+    {sr:41,chq:'731',party:'S & V SWITCHGEARS',purpose:'1600 KVA Transformer Repair',amount:599157,date:'01-Mar-2026',status:'Paid',clearedOn:'02-Mar-2026'},
+    {sr:42,chq:'732',party:'R.P Enterpises',purpose:'Garbage Collection',amount:18880,date:'05-Mar-2026',status:'Bounced',clearedOn:''},
+    {sr:43,chq:'733',party:'Inn4smart Solutions',purpose:'Sub Meter AMC',amount:26621,date:'05-Mar-2026',status:'Pending',clearedOn:''},
+    {sr:44,chq:'734',party:'Enviro facility',purpose:'Technical & H.K team Bill',amount:703289,date:'05-Mar-2026',status:'Paid',clearedOn:'06-Mar-2026'},
+    {sr:45,chq:'735',party:'Petty Cash',purpose:'Internal material',amount:50000,date:'06-Mar-2026',status:'Paid',clearedOn:'06-Mar-2026'},
+    {sr:46,chq:'736',party:'Team Works',purpose:'Security',amount:336003,date:'07-Mar-2026',status:'Paid',clearedOn:'07-Mar-2026'},
+    {sr:47,chq:'737',party:'DPS Electricals',purpose:'1500 kva Transformer Rent',amount:94400,date:'10-Mar-2026',status:'Pending',clearedOn:''},
+    {sr:48,chq:'738',party:'Kamal Motors',purpose:'Diesel Purchasing',amount:0,date:'13-Mar-2026',status:'Cancel',clearedOn:''},
+    {sr:49,chq:'739',party:'Kamal Motors',purpose:'Diesel Purchasing',amount:61337,date:'13-Mar-2026',status:'Pending',clearedOn:''},
+    {sr:50,chq:'740',party:'Petty Cash',purpose:'Internal material',amount:15000,date:'13-Mar-2026',status:'Pending',clearedOn:''},
+    {sr:51,chq:'741',party:'Petty Cash',purpose:'Internal material',amount:25932,date:'13-Mar-2026',status:'Pending',clearedOn:''},
+    {sr:52,chq:'742',party:'KARAM ELECTRICALS',purpose:'Transformer connection',amount:5900,date:'13-Mar-2026',status:'Pending',clearedOn:''},
+    {sr:53,chq:'743',party:'DHBVN Monthly Electricity',purpose:'DHBVN Monthly Electricity',amount:574599,date:'13-Mar-2026',status:'Pending',clearedOn:''},
+    {sr:54,chq:'744',party:'KVN ENTERPRISES',purpose:'CCTV Installation Advance',amount:0,date:'17-Mar-2026',status:'Cancel',clearedOn:''},
+    {sr:55,chq:'745',party:'KVN ENTERPRISES',purpose:'CCTV Installation Advance',amount:150000,date:'17-Mar-2026',status:'Paid',clearedOn:''},
+    {sr:56,chq:'746',party:'Kamal Motors',purpose:'Diesel Purchasing',amount:113876,date:'27-Mar-2026',status:'Pending',clearedOn:''},
+    {sr:57,chq:'747',party:'Shri Ganpati pipes & Tools',purpose:'Plumbing material purchase',amount:7671,date:'27-Mar-2026',status:'Pending',clearedOn:''},
+    {sr:58,chq:'748',party:'Park smart Technologetes',purpose:'Boom Barrier Entry Exit',amount:42480,date:'27-Mar-2026',status:'Pending',clearedOn:''},
+    {sr:59,chq:'749',party:'BHARDWAJ TRADING CO.',purpose:'EID Decoration Items',amount:16711,date:'27-Mar-2026',status:'Pending',clearedOn:''},
+    {sr:60,chq:'750',party:'M.S ENGINEER WORK SHOP',purpose:'125 KVA D.G Repairing',amount:0,date:'28-Mar-2026',status:'Cancel',clearedOn:''},
+    {sr:61,chq:'751',party:'M.S ENGINEER WORK SHOP',purpose:'125 KVA D.G Repairing',amount:15458,date:'28-Mar-2026',status:'Pending',clearedOn:''},
+  ];
+
+  // Enrich with bank match
+  const enriched = useMemo(() => {
+    return CHEQUES.map(c => {
+      const bankMatch = bankDebits.find(b => {
+        const bRef = b.ref.replace(/^0+/, '');
+        return bRef === c.chq && Math.abs(b.amount - c.amount) < 1;
+      });
+      const actualStatus = c.status === 'Bounced' ? 'Bounced'
+        : c.status === 'Cancel' ? 'Cancel'
+        : bankMatch ? 'Cleared'
+        : c.status === 'Paid' ? 'Paid (Unverified)'
+        : 'Pending';
+      return { ...c, bankMatch, actualStatus };
+    });
+  }, [bankDebits]);
+
+  const filtered_cheques = useMemo(() => {
+    if (filter === 'all')       return enriched;
+    if (filter === 'matched')   return enriched.filter(c => c.actualStatus === 'Cleared');
+    if (filter === 'unmatched') return enriched.filter(c => ['Pending','Paid (Unverified)'].includes(c.actualStatus));
+    if (filter === 'bounced')   return enriched.filter(c => c.actualStatus === 'Bounced');
+    if (filter === 'cancelled') return enriched.filter(c => c.actualStatus === 'Cancel');
+    return enriched;
+  }, [enriched, filter]);
+
+  const summary = useMemo(() => {
+    const cleared    = enriched.filter(c => c.actualStatus === 'Cleared');
+    const bounced    = enriched.filter(c => c.actualStatus === 'Bounced');
+    const cancelled  = enriched.filter(c => c.actualStatus === 'Cancel');
+    const pending    = enriched.filter(c => ['Pending','Paid (Unverified)'].includes(c.actualStatus));
+    return {
+      total: enriched.length,
+      cleared: cleared.length, clearedAmt: cleared.reduce((s,c)=>s+c.amount,0),
+      bounced: bounced.length, bouncedAmt: bounced.reduce((s,c)=>s+c.amount,0),
+      cancelled: cancelled.length,
+      pending: pending.length, pendingAmt: pending.reduce((s,c)=>s+c.amount,0),
+    };
+  }, [enriched]);
+
+  const statusBadge = (status) => {
+    const cfg = {
+      'Cleared':          'bg-green-100 text-green-700',
+      'Paid (Unverified)':'bg-yellow-100 text-yellow-700',
+      'Pending':          'bg-orange-100 text-orange-700',
+      'Bounced':          'bg-red-100 text-red-700',
+      'Cancel':           'bg-gray-100 text-gray-500',
+    };
+    return <span className={`status-badge text-xs ${cfg[status]||'bg-gray-100 text-gray-500'}`}>{status}</span>;
+  };
+
+  if (bankDebits.length === 0) {
+    return (
+      <div className="text-center py-16 text-gray-400">
+        <svg className="w-12 h-12 mx-auto mb-3 text-gray-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+        </svg>
+        <p className="text-sm font-medium">No bank statement data loaded yet.</p>
+        <p className="text-xs mt-1">Import the HDFC bank statement first using the Import Statement button.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      {/* Summary KPIs */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {[
+          {label:'Cleared in Bank', val:summary.cleared, sub:INR.format(summary.clearedAmt), color:'#10b981', filter:'matched'},
+          {label:'Pending/Unverified', val:summary.pending, sub:INR.format(summary.pendingAmt), color:'#f97316', filter:'unmatched'},
+          {label:'Bounced', val:summary.bounced, sub:summary.bounced>0?INR.format(summary.bouncedAmt):'—', color:'#ef4444', filter:'bounced'},
+          {label:'Cancelled', val:summary.cancelled, sub:'Zero-amount cheques', color:'#9ca3af', filter:'cancelled'},
+        ].map(({label,val,sub,color,filter:f}) => (
+          <div key={label} onClick={() => setFilter(filter===f?'all':f)}
+            className={`bg-white rounded-xl p-4 shadow-sm cursor-pointer transition-all hover:shadow-md ${filter===f?'ring-2':''}` }
+            style={filter===f?{ringColor:color}:{}}>
+            <p className="text-xs text-gray-500">{label}</p>
+            <p className="text-2xl font-bold mt-1" style={{color}}>{val}</p>
+            <p className="text-xs text-gray-400 mt-0.5">{sub}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Insight cards */}
+      {summary.bounced > 0 && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-sm">
+          <div className="flex items-start gap-3">
+            <svg className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            <div>
+              <p className="font-semibold text-red-800">{summary.bounced} Bounced Cheque{summary.bounced>1?'s':''} Detected</p>
+              <p className="text-red-700 text-xs mt-1">
+                Chq #704 — R.P Enterpises ₹18,880 (Feb 2026, returned "amounts in words differ") · 
+                Chq #732 — R.P Enterpises ₹18,880 (Mar 2026, returned "amounts in words differ")
+              </p>
+              <p className="text-red-600 text-xs mt-1">Bank charged ₹59 return fee per bounce. Follow up with vendor.</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {summary.pending > 0 && (
+        <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 text-sm">
+          <div className="flex items-start gap-3">
+            <svg className="w-5 h-5 text-orange-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            <div>
+              <p className="font-semibold text-orange-800">{summary.pending} Cheques Not Yet Found in Bank Statement</p>
+              <p className="text-orange-700 text-xs mt-1">
+                Total exposure: {INR.format(summary.pendingAmt)}. 
+                These are mostly Mar-2026 cheques issued after the statement cut-off (28-Mar-2026) or still in transit.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Filter tabs */}
+      <div className="flex gap-2 flex-wrap">
+        {[['all','All Cheques'],['matched','Cleared'],['unmatched','Pending'],['bounced','Bounced'],['cancelled','Cancelled']].map(([f,label]) => (
+          <button key={f} onClick={() => setFilter(f)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${filter===f?'bg-blue-500 text-white':'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
+            {label} ({f==='all'?enriched.length:f==='matched'?summary.cleared:f==='unmatched'?summary.pending:f==='bounced'?summary.bounced:summary.cancelled})
+          </button>
+        ))}
+      </div>
+
+      {/* Reconciliation table */}
+      <div className="bg-white rounded-2xl shadow-sm overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50">
+            <tr>
+              {['#','Chq No.','Party','Purpose','Chq Amount','Bank Amount','Chq Date','Cleared Date','Status','Match'].map(h => (
+                <th key={h} className="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase whitespace-nowrap">{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {filtered_cheques.map(c => (
+              <tr key={c.sr} className={`hover:bg-gray-50 transition-colors ${c.actualStatus==='Bounced'?'bg-red-50':''}`}>
+                <td className="px-3 py-2.5 text-xs text-gray-400">{c.sr}</td>
+                <td className="px-3 py-2.5 font-mono font-semibold text-gray-800">{c.chq}</td>
+                <td className="px-3 py-2.5">
+                  <p className="text-gray-800 font-medium max-w-[140px] truncate" title={c.party}>{c.party}</p>
+                </td>
+                <td className="px-3 py-2.5 text-gray-500 max-w-[160px] truncate text-xs" title={c.purpose}>{c.purpose}</td>
+                <td className="px-3 py-2.5 text-right font-semibold text-gray-800 whitespace-nowrap">
+                  {c.amount > 0 ? INR.format(c.amount) : <span className="text-gray-400">—</span>}
+                </td>
+                <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                  {c.bankMatch ? (
+                    <span className="font-semibold text-emerald-600">{INR.format(c.bankMatch.amount)}</span>
+                  ) : <span className="text-gray-300">—</span>}
+                </td>
+                <td className="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">{c.date}</td>
+                <td className="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">
+                  {c.bankMatch ? c.bankMatch.date : (c.clearedOn || <span className="text-gray-300">—</span>)}
+                </td>
+                <td className="px-3 py-2.5">{statusBadge(c.actualStatus)}</td>
+                <td className="px-3 py-2.5">
+                  {c.bankMatch ? (
+                    <div className="flex items-center gap-1">
+                      <svg className="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"/>
+                      </svg>
+                      <span className="text-xs text-emerald-600 font-medium">Matched</span>
+                    </div>
+                  ) : c.actualStatus === 'Cancel' ? (
+                    <span className="text-xs text-gray-400">N/A</span>
+                  ) : (
+                    <div className="flex items-center gap-1">
+                      <svg className="w-4 h-4 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                      </svg>
+                      <span className="text-xs text-orange-500 font-medium">Not found</span>
+                    </div>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div className="px-4 py-3 border-t border-gray-100 bg-gray-50 flex items-center justify-between text-xs text-gray-500">
+          <span>{filtered_cheques.length} cheques shown</span>
+          <span className="font-semibold text-gray-700">
+            Total: {INR.format(filtered_cheques.reduce((s,c)=>s+c.amount,0))}
+          </span>
+        </div>
       </div>
     </div>
   );
