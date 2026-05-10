@@ -22,19 +22,19 @@ const BUDGET_CONSTANTS = {
 
 // Default monthly vendor expenses (editable by admin)
 const DEFAULT_EXPENSES = [
-  { id: 'security',     label: 'Security Services',          amount: 280000, icon: '🛡️',  color: '#3b82f6' },
-  { id: 'enviro',       label: 'Enviro (Housekeeping)',       amount: 120000, icon: '🧹',  color: '#10b981' },
-  { id: 'garbage',      label: 'Garbage Collection',         amount: 25000,  icon: '🗑️',  color: '#6b7280' },
-  { id: 'smartmeters',  label: 'Smart Meters (AMC)',         amount: 18000,  icon: '⚡',  color: '#f59e0b' },
+  { id: 'security',     label: 'Security Services',          amount: 426000, icon: '🛡️',  color: '#3b82f6' },
+  { id: 'enviro',       label: 'Enviro (Housekeeping)',       amount: 800000, icon: '🧹',  color: '#10b981' },
+  { id: 'garbage',      label: 'Garbage Collection',         amount: 18880,  icon: '🗑️',  color: '#6b7280' },
+  { id: 'smartmeters',  label: 'Smart Meters (AMC)',         amount: 26621,  icon: '⚡',  color: '#f59e0b' },
   { id: 'stp',          label: 'STP Operations',             amount: 35000,  icon: '💧',  color: '#0ea5e9' },
-  { id: 'boombarrier',  label: 'Boom Barrier (AMC)',         amount: 8000,   icon: '🚧',  color: '#8b5cf6' },
-  { id: 'diesel',       label: 'Diesel (DG Set)',            amount: 45000,  icon: '⛽',  color: '#dc2626' },
-  { id: 'plumbing',     label: 'Plumbing & Civil',           amount: 20000,  icon: '🔧',  color: '#ea580c' },
+  { id: 'boombarrier',  label: 'Boom Barrier (AMC)',         amount: 12000,   icon: '🚧',  color: '#8b5cf6' },
+  { id: 'diesel',       label: 'Diesel (DG Set)',            amount: 150000,  icon: '⛽',  color: '#dc2626' },
+  { id: 'plumbing',     label: 'Plumbing & Civil',           amount: 100000,  icon: '🔧',  color: '#ea580c' },
   { id: 'lifts',        label: 'Lift AMC',                   amount: 55000,  icon: '🛗',  color: '#7c3aed' },
   { id: 'dgset',        label: 'DG Set AMC',                 amount: 12000,  icon: '⚙️',  color: '#475569' },
   { id: 'transformer',  label: 'Transformer AMC',            amount: 8000,   icon: '🔌',  color: '#0f766e' },
   { id: 'fire',         label: 'Fire Extinguisher AMC',      amount: 6000,   icon: '🔥',  color: '#ef4444' },
-  { id: 'govt',         label: 'Govt. Liaison / Compliance', amount: 15000,  icon: '🏛️',  color: '#1d4ed8' },
+  { id: 'govt',         label: 'Govt. Liaison / Compliance', amount: 40000,  icon: '🏛️',  color: '#1d4ed8' },
   { id: 'accidental',   label: 'Accidental Maintenance',     amount: 25000,  icon: '⚠️',  color: '#d97706' },
   { id: 'pettycash',    label: 'Petty Cash / Imprest',       amount: 30000,  icon: '💵',  color: '#059669' },
 ];
