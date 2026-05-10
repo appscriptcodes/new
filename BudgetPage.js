@@ -400,8 +400,8 @@ function BudgetPage() {
               <div className="border-t pt-4">
                 <p className="text-xs font-semibold text-gray-600 mb-3">Monthly per Flat</p>
                 {[
-                  { label: 'Type A (585.41 sq ft)', cam: typeAArea * camRate, total: perFlatA },
-                  { label: 'Type B (554.17 sq ft)', cam: typeBArea * camRate, total: perFlatB },
+                  { label: 'Type A (684.52 sq ft)', cam: typeAArea * camRate, total: perFlatA },
+                  { label: 'Type B (652.98 sq ft)', cam: typeBArea * camRate, total: perFlatB },
                 ].map(f => (
                   <div key={f.label} className="mb-3">
                     <p className="text-xs text-gray-500 mb-1">{f.label}</p>
