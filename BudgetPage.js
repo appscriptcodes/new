@@ -13,8 +13,8 @@
 
 // ── Constants ─────────────────────────────────────────
 const BUDGET_CONSTANTS = {
-  TYPE_A: { count: 376, area: 585.41, balcony: 99.11 },
-  TYPE_B: { count: 376, area: 554.17, balcony: 98.81 },
+  TYPE_A: { count: 376, area: 684.52, balcony: 99.11 },
+  TYPE_B: { count: 376, area: 652.98, balcony: 98.81 },
   CAM_RATE: 2.57,
   WATER_PER_FLAT: 300,
   TOTAL_FLATS: 752,
