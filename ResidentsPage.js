@@ -543,7 +543,7 @@ function ResidentsPage({ data }) {
 
       {/* ── KPI Row (always visible) ── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
-        <StatCard label="Total Flats"    value={stats.total}       color="#3b82f6" icon="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+        <StatCard label="Total Flats"    value={stats.total}       color="#3b82f6" />
         <StatCard label="Owner Occupied" value={stats.owners}      color="#3b82f6" sub={`${Math.round(stats.owners/stats.total*100)}% of flats`} onClick={() => { setActiveTab('directory'); setTypeFilter(typeFilter === 'Owner' ? 'all' : 'Owner'); }} active={typeFilter === 'Owner'} />
         <StatCard label="Tenant Rented"  value={stats.tenants}     color="#10b981" sub={`${Math.round(stats.tenants/stats.total*100)}% of flats`} onClick={() => { setActiveTab('directory'); setTypeFilter(typeFilter === 'Tenant' ? 'all' : 'Tenant'); }} active={typeFilter === 'Tenant'} />
         <StatCard label="Vacant"         value={stats.vacant}      color="#f59e0b" sub="Unoccupied" onClick={() => { setActiveTab('directory'); setTypeFilter(typeFilter === 'Vaccant' ? 'all' : 'Vaccant'); }} active={typeFilter === 'Vaccant'} />
