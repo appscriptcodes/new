@@ -22,7 +22,7 @@ const BUDGET_CONSTANTS = {
   WATER_PER_FLAT: 300,
   ELEC_FIXED:     60,    // ₹60 fixed per flat per month
   ELEC_RATE:      6.80,  // ₹ per unit for variable
-  ELEC_UNITS:     8000,  // common area units/month
+  ELEC_UNITS:     0,  // common area units/month
   TOTAL_FLATS:    752,
 };
 
