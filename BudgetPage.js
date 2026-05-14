@@ -666,7 +666,7 @@ function BudgetPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
-                  {[2.00,2.25,2.57,2.75,3.00,3.25,3.50].map(rate => {
+                  {[2.00,2.25,2.57,2.75,3.00,3.25,3.50,3.57,4.00].map(rate => {
                     const cA = AREA_A*rate, cB = AREA_B*rate;
                     const tA = cA+waterRate+elecFixed+elecVarPF;
                     const tB = cB+waterRate+elecFixed+elecVarPF;
@@ -880,7 +880,7 @@ function BudgetPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
-                    {[2.00,2.25,2.57,2.75,3.00,3.25,3.50].map(rate => {
+                    {[2.00,2.25,2.57,2.75,3.00,3.25,3.50,3.57,4.00].map(rate => {
                       const cam = (occupiedA*AREA_A*rate)+(occupiedB*AREA_B*rate);
                       const tot = cam + revenue.water + revenue.elecF + revenue.elecVar;
                       const sur = tot - totalExpenses;
