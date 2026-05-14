@@ -466,7 +466,7 @@ function BudgetPage() {
       </div>
 
       {/* Non-paying alert */}
-      {totalOccupied < totalFlats && (
+      {activeTab === 'overview' && totalOccupied < totalFlats && (
         <div className="bg-amber-50 border border-amber-300 rounded-xl px-5 py-3 flex items-center gap-3">
           <span className="text-xl">⚠️</span>
           <div>
