@@ -58,7 +58,7 @@ const DEFAULT_EXPENSES = [
   // ── Vendors ──
   { id: 'garbage',        label: 'Garbage Picking Vendor',                       amount: 18880,  icon: '🗑️', color: '#a3a3a3' },
   { id: 'inn4smart',      label: 'Inn4Smart Solutions',                          amount: 26621,  icon: '📡', color: '#8b5cf6' },
-  { id: 'boom',           label: 'Boom Barrier',                                 amount: 42480,  icon: '🚧', color: '#a855f7' },
+  { id: 'boom',           label: 'Boom Barrier',                                 amount: 14160,  icon: '🚧', color: '#a855f7' },
   { id: 'cctv',           label: 'CCTV AMC',                                     amount: 8333,   icon: '📷', color: '#6366f1' },
   // ── Miscellaneous & Admin ──
   { id: 'events',         label: 'Events Expenditure',                           amount: 6250,   icon: '🎉', color: '#ec4899' },
