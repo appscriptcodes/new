@@ -14,6 +14,48 @@ function Chatbot({ data, setView, isAdmin, theme, onClose }) {
   const [loading, setLoading] = React.useState(false);
   const messagesEndRef         = React.useRef(null);
 
+   const [pos, setPos] = React.useState({ x: null, y: null });
+
+const dragRef = React.useRef({
+  dragging: false,
+  offsetX: 0,
+  offsetY: 0
+});
+
+const startDrag = (e) => {
+  const box = e.currentTarget.closest(".chatbot-box");
+  const rect = box.getBoundingClientRect();
+
+  dragRef.current = {
+    dragging: true,
+    offsetX: e.clientX - rect.left,
+    offsetY: e.clientY - rect.top
+  };
+};
+
+React.useEffect(() => {
+  const move = (e) => {
+    if (!dragRef.current.dragging) return;
+
+    setPos({
+      x: e.clientX - dragRef.current.offsetX,
+      y: e.clientY - dragRef.current.offsetY
+    });
+  };
+
+  const stop = () => {
+    dragRef.current.dragging = false;
+  };
+
+  window.addEventListener("mousemove", move);
+  window.addEventListener("mouseup", stop);
+
+  return () => {
+    window.removeEventListener("mousemove", move);
+    window.removeEventListener("mouseup", stop);
+  };
+}, []);
+
   React.useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
@@ -119,9 +161,16 @@ function Chatbot({ data, setView, isAdmin, theme, onClose }) {
   return (
     <>
       {isOpen && (
-        <div className={`fixed bottom-28 right-6 w-[420px] max-h-[600px] backdrop-blur-xl rounded-3xl shadow-2xl z-[100] flex flex-col ${theme === 'dark' ? 'bg-gray-800/95 border-gray-600/50' : 'bg-white/95 border-gray-200/50'} border-2`}>
+        <div
+  className={`chatbot-box fixed w-[420px] max-h-[600px] backdrop-blur-xl rounded-3xl shadow-2xl z-[100] flex flex-col ${theme === 'dark' ? 'bg-gray-800/95 border-gray-600/50' : 'bg-white/95 border-gray-200/50'} border-2`}
+  style={
+    pos.x === null
+      ? { bottom: "7rem", right: "1.5rem" }
+      : { left: `${pos.x}px`, top: `${pos.y}px` }
+  }
+>
           {/* Header */}
-          <div className="p-5 border-b flex items-center justify-between rounded-t-3xl bg-gradient-to-r from-blue-500 to-purple-600">
+          <div   onMouseDown={startDrag}   className="p-5 border-b flex items-center justify-between rounded-t-3xl bg-gradient-to-r from-blue-500 to-purple-600 cursor-move select-none" >
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 bg-white/20 rounded-2xl flex items-center justify-center backdrop-blur-sm">
                 <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -136,7 +185,7 @@ function Chatbot({ data, setView, isAdmin, theme, onClose }) {
                 </p>
               </div>
             </div>
-            <button onClick={() => { setIsOpen(false); onClose(); }} className="p-2 rounded-xl transition-colors hover:bg-white/20">
+            <button   onMouseDown={(e) => e.stopPropagation()}   onClick={() => { setIsOpen(false); onClose(); }}   className="p-2 rounded-xl transition-colors hover:bg-white/20" >
               <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
