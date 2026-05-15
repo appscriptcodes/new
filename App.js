@@ -67,6 +67,51 @@ function App() {
   const [sidebarOpen,         setSidebarOpen]         = useState(true);
   const [showChatbot,         setShowChatbot]         = useState(false);
   const [showPasswordModal,   setShowPasswordModal]   = useState(false);
+  const [chatBtnPos, setChatBtnPos] = React.useState({
+  x: window.innerWidth - 120,
+  y: window.innerHeight - 120
+});
+
+const chatBtnDrag = React.useRef({
+  dragging: false,
+  offsetX: 0,
+  offsetY: 0
+});
+
+const startChatBtnDrag = (e) => {
+  if (e.button !== 0) return;
+
+  chatBtnDrag.current = {
+    dragging: true,
+    offsetX: e.clientX - chatBtnPos.x,
+    offsetY: e.clientY - chatBtnPos.y
+  };
+
+  e.preventDefault();
+};
+
+React.useEffect(() => {
+  const move = (e) => {
+    if (!chatBtnDrag.current.dragging) return;
+
+    setChatBtnPos({
+      x: Math.max(10, Math.min(window.innerWidth - 80, e.clientX - chatBtnDrag.current.offsetX)),
+      y: Math.max(10, Math.min(window.innerHeight - 80, e.clientY - chatBtnDrag.current.offsetY))
+    });
+  };
+
+  const stop = () => {
+    chatBtnDrag.current.dragging = false;
+  };
+
+  window.addEventListener("mousemove", move);
+  window.addEventListener("mouseup", stop);
+
+  return () => {
+    window.removeEventListener("mousemove", move);
+    window.removeEventListener("mouseup", stop);
+  };
+}, []);
 
   // Restore session on mount
   useEffect(() => {
@@ -317,9 +362,21 @@ function App() {
           {showChatbot && <Chatbot data={data} setView={setView} isAdmin={isAdmin} theme={theme} onClose={() => setShowChatbot(false)} />}
 
           {/* Floating chatbot toggle */}
-          <button onClick={() => setShowChatbot(!showChatbot)}
-            className="fixed bottom-6 right-6 w-14 h-14 bg-blue-600 hover:bg-blue-700 text-white rounded-full shadow-lg flex items-center justify-center z-50 transition-all"
-            aria-label="Toggle Chatbot">
+<div
+  onMouseDown={startChatBtnDrag}
+  style={{
+    position: "fixed",
+    left: `${chatBtnPos.x}px`,
+    top: `${chatBtnPos.y}px`,
+    zIndex: 9999
+  }}
+>
+  <button
+    onClick={() => setShowChatbot(!showChatbot)}
+    className="w-14 h-14 bg-blue-600 hover:bg-blue-700 text-white rounded-full shadow-lg flex items-center justify-center transition-all cursor-grab active:cursor-grabbing"
+    aria-label="Toggle Chatbot"
+  >
+       
             {showChatbot ? (
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -330,6 +387,7 @@ function App() {
               </svg>
             )}
           </button>
+</div>
 
           {/* Change Password Modal */}
           {showPasswordModal && (
