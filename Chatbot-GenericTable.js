@@ -185,8 +185,6 @@ function Chatbot({ data, setView, isAdmin, theme, onClose }) {
         isAdmin
       });
 
-      console.log("CHAT RESPONSE:", response); 
-
       setMessages(prev => [
         ...prev,
         {
@@ -195,8 +193,7 @@ function Chatbot({ data, setView, isAdmin, theme, onClose }) {
           sender: 'bot'
         }
       ]);
-    } catch (err) {
-  console.error("CHAT ERROR:", err);
+    } catch {
       setMessages(prev => [
         ...prev,
         { id: Date.now() + 1, text: getLocalResponse(userInput), sender: 'bot' }
@@ -242,7 +239,7 @@ function Chatbot({ data, setView, isAdmin, theme, onClose }) {
                 <h3 className="font-bold text-lg text-white">AI Assistant</h3>
                 <p className="text-xs text-white/80 flex items-center gap-1">
                   <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
-                  Powered by Groq AI
+                  Powered by Gemini AI
                 </p>
               </div>
             </div>
