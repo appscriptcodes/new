@@ -243,7 +243,7 @@ function TransactionAnalytics({ data }) {
           <div key={k.label} className={`${k.bg} border ${k.border} rounded-xl p-4`}>
             <p className="text-xs font-medium text-gray-500 mb-1">{k.label}</p>
             <p className={`text-xl font-bold ${k.color} leading-tight`}>{k.val}</p>
-           <p className="text-xs text-gray-400 mt-1">{filtered.length}/{data.length} transactions</p>
+           <p className="text-xs text-gray-400 mt-1">{data.length} transactions</p>
           </div>
         ))}
       </div>
@@ -334,37 +334,6 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
   const fileRef = useRef(null);
 
   /* ── Available years & months for filter dropdowns ── */
-  const availableYears = useMemo(() => {
-    const years = new Set();
-    data.forEach(t => { if (t.Date) years.add(t.Date.substring(0, 4)); });
-    return Array.from(years).sort((a, b) => b.localeCompare(a));
-  }, [data]);
-
-  const availableMonths = useMemo(() => {
-    const MONTH_NAMES = ['January','February','March','April','May','June',
-      'July','August','September','October','November','December'];
-    const months = new Set();
-    data.forEach(t => {
-      if (t.Date && (!filterYear || t.Date.startsWith(filterYear)))
-        months.add(t.Date.substring(5, 7));
-    });
-    return Array.from(months).sort().map(m => ({ value: m, label: MONTH_NAMES[+m - 1] }));
-  }, [data, filterYear]);
-
-  /* Filtered rows — declared before stats so stats can reference filtered */
-  const filtered = useMemo(() => {
-    let r = data;
-    if (typeFilter === 'credit') r = r.filter(t => t.Type === 'Credit' || Number(t['Deposit Amt']||0) > 0);
-    if (typeFilter === 'debit')  r = r.filter(t => t.Type === 'Debit'  || Number(t['Withdrawal Amt']||0) > 0);
-    if (filterYear)  r = r.filter(t => t.Date && t.Date.startsWith(filterYear));
-    if (filterMonth) r = r.filter(t => t.Date && t.Date.substring(5, 7) === filterMonth);
-    if (!search.trim()) return r;
-    const q = search.toLowerCase();
-    return r.filter(row => Object.values(row).some(v => String(v).toLowerCase().includes(q)));
-  }, [data, search, typeFilter, filterYear, filterMonth]);
-
-  /* Summary stats — uses filtered so cards reflect active filters */
-/* Available years & months for dropdowns */
   const availableYears = useMemo(() => {
     const years = new Set();
     data.forEach(t => { if (t.Date) years.add(t.Date.substring(0, 4)); });
