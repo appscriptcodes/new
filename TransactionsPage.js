@@ -4,16 +4,10 @@
    Full bank-statement columns + Analytics dashboard
    =================================================== */
 
-/* ── Updated Auto-categoriser with Remarks Priority ── */
-function autoCategory(narration, type, remarks) {
-  // Priority 1: Use Remarks if present
-  if (remarks && remarks.trim() !== "") {
-    return remarks.trim(); 
-  }
-
+/* ── Auto-categoriser based on narration patterns ── */
+function autoCategory(narration, type) {
   const n = (narration || '').toUpperCase();
-  
-  // Priority 2: Fallback to Narration-based logic
+  // Credits
   if (type === 'Credit') {
     if (n.includes('EASEBUZZ'))                        return 'Maintenance Collection';
     if (n.includes('MOVE IN') || n.includes('MOVE OUT')) return 'Move In/Out Charges';
@@ -28,7 +22,7 @@ function autoCategory(narration, type, remarks) {
     if (n.includes('FT') && n.includes('CR'))          return 'Fund Transfer In';
     return 'Other Income';
   }
-  
+  // Debits
   if (n.includes('ENVIRO'))                            return 'Housekeeping (Enviro)';
   if (n.includes('TEAMWORKS') || n.includes('TEAM WORKS')) return 'Security (TeamWorks)';
   if (n.includes('DHBVN') || n.includes('BIJLI VITRAN')) return 'Electricity (DHBVN)';
@@ -58,7 +52,7 @@ function normDate(val) {
   return s;
 }
 
-/* ── Updated Bank statement XLS/XLSX parser (SheetJS) ── */
+/* ── Bank statement XLS/XLSX parser (SheetJS, runs in browser) ── */
 function parseBankStatement(workbook) {
   const ws  = workbook.Sheets[workbook.SheetNames[0]];
   const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: false });
@@ -82,7 +76,6 @@ function parseBankStatement(workbook) {
   const idxWd  = col('Withdrawal');
   const idxDep = col('Deposit');
   const idxBal = col('Closing');
-  const idxRem = col('Remarks'); // New mapping for the Remarks column
 
   const out = [];
   for (let i = headerIdx + 1; i < raw.length; i++) {
@@ -96,10 +89,8 @@ function parseBankStatement(workbook) {
     if (wd === 0 && dep === 0) continue;
     const type    = dep > 0 ? 'Credit' : 'Debit';
     const narr    = String(row[idxNar]||'').trim();
-    const remarks = String(row[idxRem]||'').trim(); // Fetch Remarks
     const refNo   = String(row[idxRef]||'').trim();
     const valueDt = normDate(row[idxVdt]);
-    
     out.push({
       Date:              normDate(dateStr),
       Narration:         narr,
@@ -110,9 +101,8 @@ function parseBankStatement(workbook) {
       'Closing Balance': bal,
       Type:              type,
       Amount:            dep > 0 ? dep : wd,
-      // Priority Logic: Use Remark for Category/Party Name
-      Category:          autoCategory(narr, type, remarks),
-      Description:       remarks && remarks !== "" ? remarks : narr, 
+      Category:          autoCategory(narr, type),
+      Description:       narr,
       Attachment:        ''
     });
   }
@@ -154,7 +144,7 @@ function TransactionAnalytics({ data }) {
     data.forEach(t => {
       const d = t.Date || '';
       if (!d) return;
-      const ym = d.substring(0, 7); 
+      const ym = d.substring(0, 7); // "2025-11"
       if (!monthMap[ym]) monthMap[ym] = { label: ym, credit: 0, debit: 0, count: 0 };
       const dep = Number(t['Deposit Amt']  || (t.Type === 'Credit' ? t.Amount : 0) || 0);
       const wd  = Number(t['Withdrawal Amt']|| (t.Type === 'Debit'  ? t.Amount : 0) || 0);
@@ -191,7 +181,7 @@ function TransactionAnalytics({ data }) {
       modeMap[mode] = (modeMap[mode] || 0) + 1;
     });
 
-    /* Balance trend */
+    /* Balance trend (closing balance per day) */
     const balMap = {};
     data.forEach(t => {
       if (t['Closing Balance'] && t.Date) balMap[t.Date] = Number(t['Closing Balance']);
@@ -218,7 +208,7 @@ function TransactionAnalytics({ data }) {
   const maxBal         = Math.max(...analytics.balTrend.map(b => b.bal), 1);
   const minBal         = Math.min(...analytics.balTrend.map(b => b.bal));
 
-  /* SVG chart for balance trend */
+  /* SVG line chart for balance trend */
   const svgW = 600, svgH = 120, pad = 10;
   const bPoints = analytics.balTrend;
   const bRange  = maxBal - minBal || 1;
@@ -233,6 +223,8 @@ function TransactionAnalytics({ data }) {
 
   return (
     <div className="space-y-4">
+
+      {/* ── KPI strip ── */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {[
           { label:'Total Credits', val: INR.format(analytics.totalIn),  sub:`Avg ${INR.format(analytics.avgCredit)}`, color:'text-emerald-600', bg:'bg-emerald-50', border:'border-emerald-200' },
@@ -243,11 +235,12 @@ function TransactionAnalytics({ data }) {
           <div key={k.label} className={`${k.bg} border ${k.border} rounded-xl p-4`}>
             <p className="text-xs font-medium text-gray-500 mb-1">{k.label}</p>
             <p className={`text-xl font-bold ${k.color} leading-tight`}>{k.val}</p>
-           <p className="text-xs text-gray-400 mt-1">{data.length} transactions</p>
+            <p className="text-xs text-gray-400 mt-1">{k.sub}</p>
           </div>
         ))}
       </div>
 
+      {/* ── Balance Trend ── */}
       {bPoints.length > 1 && (
         <div className="bg-white rounded-2xl shadow-sm p-5">
           <div className="flex items-center justify-between mb-3">
@@ -265,14 +258,20 @@ function TransactionAnalytics({ data }) {
                   <stop offset="100%" stopColor="#6366f1" stopOpacity="0.02"/>
                 </linearGradient>
               </defs>
-              <polygon points={`${pad},${svgH-pad} ${pts} ${svgW-pad},${svgH-pad}`} fill="url(#balGrad)" />
+              <polygon
+                points={`${pad},${svgH-pad} ${pts} ${svgW-pad},${svgH-pad}`}
+                fill="url(#balGrad)"
+              />
               <polyline points={pts} fill="none" stroke="#6366f1" strokeWidth="2" strokeLinejoin="round" />
             </svg>
           </div>
         </div>
       )}
 
+      {/* ── Monthly bars + Mode breakdown ── */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+        {/* Monthly In/Out */}
         <div className="bg-white rounded-2xl shadow-sm p-5">
           <h3 className="text-sm font-semibold text-gray-700 mb-4">Monthly Flow</h3>
           <div className="space-y-3 overflow-y-auto" style={{ maxHeight:'260px' }}>
@@ -284,62 +283,105 @@ function TransactionAnalytics({ data }) {
                   <span className="ml-auto text-emerald-600 font-medium">{INR.format(m.credit)}</span>
                 </div>
                 <div className="flex gap-1 h-2">
-                  <div className="bg-emerald-400 rounded-full" style={{ width: `${(m.credit/maxMonthCredit)*100}%`, minWidth: m.credit>0?'2px':0 }} />
+                  <div className="bg-emerald-400 rounded-full" style={{ width: `${(m.credit/maxMonthCredit)*100}%`, minWidth: m.credit>0?'2px':0, transition:'width 0.4s' }} />
                 </div>
                 <div className="flex gap-1 h-2 mt-0.5">
-                  <div className="bg-red-400 rounded-full" style={{ width: `${(m.debit/maxMonthDebit)*100}%`, minWidth: m.debit>0?'2px':0 }} />
+                  <div className="bg-red-400 rounded-full" style={{ width: `${(m.debit/maxMonthDebit)*100}%`, minWidth: m.debit>0?'2px':0, transition:'width 0.4s' }} />
                 </div>
                 <div className="flex justify-end text-xs text-red-500 mt-0.5">{INR.format(m.debit)}</div>
               </div>
             ))}
           </div>
+          <div className="flex gap-4 mt-3 pt-3 border-t border-gray-100 text-xs">
+            <span className="flex items-center gap-1"><span className="w-3 h-2 bg-emerald-400 rounded-full inline-block"/> Credits</span>
+            <span className="flex items-center gap-1"><span className="w-3 h-2 bg-red-400 rounded-full inline-block"/> Debits</span>
+          </div>
         </div>
 
+        {/* Payment Mode */}
         <div className="bg-white rounded-2xl shadow-sm p-5">
           <h3 className="text-sm font-semibold text-gray-700 mb-4">Transaction Modes</h3>
           <div className="space-y-2 overflow-y-auto" style={{ maxHeight:'260px' }}>
             {Object.entries(analytics.modeMap).sort((a,b)=>b[1]-a[1]).map(([mode, cnt]) => (
               <div key={mode} className="flex items-center gap-2">
-                <div className="w-2.5 h-2.5 rounded-full" style={{ background: modeColors[mode]||'#94a3b8' }} />
-                <span className="text-xs text-gray-600 w-16">{mode}</span>
+                <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: modeColors[mode]||'#94a3b8' }} />
+                <span className="text-xs text-gray-600 w-16 flex-shrink-0">{mode}</span>
                 <div className="flex-1 bg-gray-100 rounded-full h-2">
-                  <div className="h-2 rounded-full" style={{ width:`${(cnt/modeTotal)*100}%`, background: modeColors[mode]||'#94a3b8' }} />
+                  <div className="h-2 rounded-full transition-all" style={{ width:`${(cnt/modeTotal)*100}%`, background: modeColors[mode]||'#94a3b8' }} />
                 </div>
                 <span className="text-xs font-medium text-gray-700 w-8 text-right">{cnt}</span>
+                <span className="text-xs text-gray-400 w-12 text-right">{((cnt/modeTotal)*100).toFixed(0)}%</span>
               </div>
             ))}
           </div>
         </div>
       </div>
+
+      {/* ── Category Breakdown ── */}
+      <div className="bg-white rounded-2xl shadow-sm p-5">
+        <h3 className="text-sm font-semibold text-gray-700 mb-4">Category Breakdown</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-gray-100">
+                {['Category','Txns','Credits','Debits','Net'].map(h => (
+                  <th key={h} className="pb-2 text-left font-medium text-gray-400 uppercase pr-4">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-50">
+              {analytics.categories.slice(0,12).map(cat => (
+                <tr key={cat.name} className="hover:bg-gray-50">
+                  <td className="py-2 pr-4 font-medium text-gray-700">{cat.name}</td>
+                  <td className="py-2 pr-4 text-gray-500">{cat.count}</td>
+                  <td className="py-2 pr-4 text-emerald-600">{cat.credit ? INR.format(cat.credit) : '—'}</td>
+                  <td className="py-2 pr-4 text-red-500">{cat.debit ? INR.format(cat.debit) : '—'}</td>
+                  <td className={`py-2 font-semibold ${(cat.credit-cat.debit)>=0?'text-emerald-600':'text-red-500'}`}>
+                    {INR.format(cat.credit - cat.debit)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
     </div>
   );
 }
 
+/* ═══════════════════════════════════════════════════════════
+   Main TransactionsPage Component
+   ═══════════════════════════════════════════════════════════ */
 function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
   const { useState, useMemo, useRef } = React;
-  const [tab, setTab] = useState('table');
-  const [search, setSearch] = useState('');
-  const [typeFilter, setTypeFilter] = useState(null);
-  const [filterYear,   setFilterYear]   = useState('');
-  const [filterMonth,  setFilterMonth]  = useState('');
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [viewRow, setViewRow] = useState(null);
-  const [editRow, setEditRow] = useState(null);
-  const [uploading, setUploading] = useState(false);
 
-  const [importStep, setImportStep] = useState('idle');
-  const [importRows, setImportRows] = useState([]);
-  const [importError, setImportError] = useState('');
-  const [importProgress, setImportProgress] = useState(0);
+  const [tab,             setTab]             = useState('table');
+  const [search,          setSearch]          = useState('');
+  const [typeFilter,      setTypeFilter]      = useState(null);
+  /* ── NEW: month/year filter state ── */
+  const [filterYear,      setFilterYear]      = useState('');
+  const [filterMonth,     setFilterMonth]     = useState('');
+  const [showAddModal,    setShowAddModal]     = useState(false);
+  const [viewRow,         setViewRow]         = useState(null);
+  const [editRow,         setEditRow]         = useState(null);
+  const [uploading,       setUploading]       = useState(false);
+
+  /* Import state */
+  const [importStep,      setImportStep]      = useState('idle');
+  const [importRows,      setImportRows]      = useState([]);
+  const [importError,     setImportError]     = useState('');
+  const [importProgress,  setImportProgress]  = useState(0);
   const fileRef = useRef(null);
 
-  /* ── Available years & months for filter dropdowns ── */
+  /* ── Available years derived from data ── */
   const availableYears = useMemo(() => {
     const years = new Set();
     data.forEach(t => { if (t.Date) years.add(t.Date.substring(0, 4)); });
-    return Array.from(years).sort((a, b) => b.localeCompare(a));
+    return Array.from(years).sort((a, b) => b.localeCompare(a)); // newest first
   }, [data]);
 
+  /* ── Available months: only months that exist within the selected year ── */
   const availableMonths = useMemo(() => {
     const MONTH_NAMES = ['January','February','March','April','May','June',
       'July','August','September','October','November','December'];
@@ -351,7 +393,7 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
     return Array.from(months).sort().map(m => ({ value: m, label: MONTH_NAMES[+m - 1] }));
   }, [data, filterYear]);
 
-  /* Filtered rows — MUST be before stats */
+  /* ── Filtered rows — applies type + year + month + search ── */
   const filtered = useMemo(() => {
     let r = data;
     if (typeFilter === 'credit') r = r.filter(t => t.Type === 'Credit' || Number(t['Deposit Amt']||0) > 0);
@@ -363,12 +405,10 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
     return r.filter(row => Object.values(row).some(v => String(v).toLowerCase().includes(q)));
   }, [data, search, typeFilter, filterYear, filterMonth]);
 
-  /* Summary stats — uses filtered so cards update with filters */
+  /* ── Summary stats — reactive to active filters ── */
   const stats = useMemo(() => {
     const getAmt = (t, type) => {
-      if (type === 'credit') {
-        return Number(t['Deposit Amt'] || (t.Type === 'Credit' ? t.Amount : 0) || 0);
-      }
+      if (type === 'credit') return Number(t['Deposit Amt'] || (t.Type === 'Credit' ? t.Amount : 0) || 0);
       return Number(t['Withdrawal Amt'] || (t.Type === 'Debit' ? t.Amount : 0) || 0);
     };
     const income  = filtered.reduce((s,t) => s + getAmt(t,'credit'), 0);
@@ -376,16 +416,18 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
     return { income, expense, net: income - expense };
   }, [filtered]);
 
+  /* File picked for import */
   function onFilePick(e) {
     const file = e.target.files[0];
     if (!file) return;
     setImportError('');
+    if (typeof XLSX === 'undefined') { setImportError('SheetJS not loaded. Please refresh.'); return; }
     const reader = new FileReader();
     reader.onload = evt => {
       try {
-        const wb   = XLSX.read(evt.target.result, { type:'binary' });
+        const wb   = XLSX.read(evt.target.result, { type:'binary', cellText:true, cellDates:false });
         const rows = parseBankStatement(wb);
-        if (!rows.length) { setImportError('No transactions found.'); return; }
+        if (!rows.length) { setImportError('No transactions found. Is this an HDFC bank statement?'); return; }
         setImportRows(rows);
         setImportStep('preview');
       } catch (err) { setImportError('Parse error: ' + String(err)); }
@@ -395,113 +437,855 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
   }
 
   async function doImport(clearFirst) {
-    setImportStep('importing');
+    setImportStep('importing'); setImportProgress(0);
     try {
-      if (clearFirst) await postPlain({ op:'clearSheet', sheet:'Transactions' });
+      if (clearFirst) {
+        const r = await postPlain({ op:'clearSheet', sheet:'Transactions' });
+        if (!r.ok) throw new Error('Clear failed: ' + (r.error||''));
+      }
       for (let i = 0; i < importRows.length; i++) {
         await postPlain({ op:'createRow', sheet:'Transactions', row: importRows[i] });
         setImportProgress(Math.round(((i+1)/importRows.length)*100));
       }
       setImportStep('done');
+      showToast(`${importRows.length} transactions imported.`, 'success');
       await onRefresh();
-      setTimeout(() => setImportStep('idle'), 2000);
+      setTimeout(() => { setImportStep('idle'); setImportRows([]); }, 2000);
     } catch (err) { setImportError(String(err)); setImportStep('preview'); }
   }
 
   const hasBankCols = data.length > 0 && ('Narration' in data[0] || 'Deposit Amt' in data[0]);
 
+  /* ── Clear all filters helper ── */
+  const hasActiveFilters = filterYear || filterMonth || typeFilter || search;
+  function clearAllFilters() {
+    setFilterYear(''); setFilterMonth(''); setTypeFilter(null); setSearch('');
+  }
+
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 fade-in">
+
+      {/* Import modal */}
       {importStep !== 'idle' && (
         <ImportPreviewModal
           step={importStep} rows={importRows} progress={importProgress} error={importError}
           onClear={() => doImport(true)} onAppend={() => doImport(false)}
-          onCancel={() => setImportStep('idle')}
+          onCancel={() => { setImportStep('idle'); setImportRows([]); setImportError(''); }}
         />
       )}
 
+      {/* ── Summary Cards ── */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div onClick={() => setTypeFilter('credit')} className={`bg-white rounded-xl p-4 shadow-sm cursor-pointer ${typeFilter==='credit'?'ring-2 ring-emerald-500':''}`}>
+        <div onClick={() => setTypeFilter(typeFilter==='credit'?null:'credit')}
+          className={`bg-white rounded-xl p-4 shadow-sm cursor-pointer transition-all ${typeFilter==='credit'?'ring-2 ring-emerald-500':'hover:shadow-md'}`}>
           <p className="text-xs text-gray-500 font-medium">Total Credits</p>
           <p className="text-2xl font-bold text-emerald-600 mt-1">{INR.format(stats.income)}</p>
+          <p className="text-xs text-gray-400 mt-1">Click to filter</p>
         </div>
-        <div onClick={() => setTypeFilter('debit')} className={`bg-white rounded-xl p-4 shadow-sm cursor-pointer ${typeFilter==='debit'?'ring-2 ring-red-500':''}`}>
+        <div onClick={() => setTypeFilter(typeFilter==='debit'?null:'debit')}
+          className={`bg-white rounded-xl p-4 shadow-sm cursor-pointer transition-all ${typeFilter==='debit'?'ring-2 ring-red-500':'hover:shadow-md'}`}>
           <p className="text-xs text-gray-500 font-medium">Total Debits</p>
           <p className="text-2xl font-bold text-red-600 mt-1">{INR.format(stats.expense)}</p>
+          <p className="text-xs text-gray-400 mt-1">Click to filter</p>
         </div>
         <div className="bg-white rounded-xl p-4 shadow-sm">
           <p className="text-xs text-gray-500 font-medium">Net Flow</p>
           <p className={`text-2xl font-bold mt-1 ${stats.net>=0?'text-blue-600':'text-orange-600'}`}>{INR.format(stats.net)}</p>
+          <p className="text-xs text-gray-400 mt-1">{filtered.length} of {data.length} transactions</p>
         </div>
       </div>
 
+      {/* ── Tab bar + toolbar ── */}
       <div className="bg-white rounded-2xl shadow-sm">
-        <div className="p-4 border-b border-gray-100 flex items-center justify-between flex-wrap gap-3">
-          <div className="flex bg-gray-100 rounded-lg p-1 gap-1">
-            {[['table','Transactions'],['analytics','Analytics']].map(([id,label]) => (
-              <button key={id} onClick={() => setTab(id)} className={`px-4 py-1.5 rounded-md text-sm font-medium ${tab===id?'bg-white shadow-sm':'text-gray-500'}`}>{label}</button>
-            ))}
-          </div>
-<div className="flex items-center gap-2 flex-wrap">
-              <select value={filterYear}
+        <div className="p-4 border-b border-gray-100">
+          <div className="flex items-center justify-between flex-wrap gap-3">
+
+            {/* Tabs */}
+            <div className="flex bg-gray-100 rounded-lg p-1 gap-1">
+              {[['table','Transactions'],['analytics','Analytics'],['reconciliation','Reconciliation']].map(([id,label]) => (
+                <button key={id} onClick={() => setTab(id)}
+                  className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${tab===id?'bg-white text-gray-900 shadow-sm':'text-gray-500 hover:text-gray-700'}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {/* Right toolbar */}
+            <div className="flex items-center gap-2 flex-wrap">
+
+              {/* ── Year filter ── */}
+              <select
+                value={filterYear}
                 onChange={e => { setFilterYear(e.target.value); setFilterMonth(''); }}
-                className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm bg-white text-gray-700">
+                className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-300"
+              >
                 <option value="">All Years</option>
                 {availableYears.map(y => <option key={y} value={y}>{y}</option>)}
               </select>
-              <select value={filterMonth}
+
+              {/* ── Month filter (disabled until a year is chosen OR months exist) ── */}
+              <select
+                value={filterMonth}
                 onChange={e => setFilterMonth(e.target.value)}
-                className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm bg-white text-gray-700"
-                disabled={availableMonths.length === 0}>
+                disabled={availableMonths.length === 0}
+                className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-300 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
                 <option value="">All Months</option>
                 {availableMonths.map(({ value, label }) => (
                   <option key={value} value={value}>{label}</option>
                 ))}
               </select>
-              {(filterYear || filterMonth || typeFilter || search) && (
+
+              {/* ── Clear filters ── */}
+              {hasActiveFilters && (
                 <button
-                  onClick={() => { setFilterYear(''); setFilterMonth(''); setTypeFilter(null); setSearch(''); }}
-                  className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm text-gray-500 hover:bg-gray-50">
-                  ✕ Clear
+                  onClick={clearAllFilters}
+                  className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm text-gray-500 hover:bg-gray-50 flex items-center gap-1 transition-colors"
+                  title="Clear all filters"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"/>
+                  </svg>
+                  Clear
                 </button>
               )}
+
               {tab === 'table' && (
                 <input type="text" value={search} onChange={e => setSearch(e.target.value)}
                   placeholder="Search…" className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm" />
               )}
+
               <ExportButton data={filtered} filename="Transactions" />
+
+              {isAdmin && (
+                <>
+                  <button onClick={() => fileRef.current?.click()}
+                    className="bg-purple-600 text-white px-3 py-1.5 rounded-lg hover:bg-purple-700 flex items-center gap-1.5 text-sm transition-colors">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
+                    </svg>
+                    Import Statement
+                  </button>
+                  <input ref={fileRef} type="file" accept=".xls,.xlsx,.csv" style={{display:'none'}} onChange={onFilePick} />
+                  <button onClick={() => setShowAddModal(true)}
+                    className="bg-blue-500 text-white px-3 py-1.5 rounded-lg hover:bg-blue-600 flex items-center gap-1.5 text-sm">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"/>
+                    </svg>
+                    Add
+                  </button>
+                </>
+              )}
+            </div>
           </div>
+
+          {/* ── Active filter pill bar ── */}
+          {hasActiveFilters && (
+            <div className="flex items-center gap-2 mt-3 flex-wrap">
+              <span className="text-xs text-gray-400">Active filters:</span>
+              {filterYear && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 border border-blue-200 text-blue-700 rounded-full text-xs font-medium">
+                  📅 {filterYear}
+                  <button onClick={() => { setFilterYear(''); setFilterMonth(''); }} className="hover:text-blue-900 ml-0.5">×</button>
+                </span>
+              )}
+              {filterMonth && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 border border-blue-200 text-blue-700 rounded-full text-xs font-medium">
+                  🗓 {availableMonths.find(m => m.value === filterMonth)?.label || filterMonth}
+                  <button onClick={() => setFilterMonth('')} className="hover:text-blue-900 ml-0.5">×</button>
+                </span>
+              )}
+              {typeFilter && (
+                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border ${typeFilter==='credit'?'bg-emerald-50 border-emerald-200 text-emerald-700':'bg-red-50 border-red-200 text-red-700'}`}>
+                  {typeFilter === 'credit' ? '↑ Credits only' : '↓ Debits only'}
+                  <button onClick={() => setTypeFilter(null)} className="hover:opacity-70 ml-0.5">×</button>
+                </span>
+              )}
+              {search && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-100 border border-gray-200 text-gray-600 rounded-full text-xs font-medium">
+                  🔍 "{search}"
+                  <button onClick={() => setSearch('')} className="hover:text-gray-900 ml-0.5">×</button>
+                </span>
+              )}
+              <span className="text-xs text-gray-400 ml-1">— {filtered.length} result{filtered.length !== 1 ? 's' : ''}</span>
+            </div>
+          )}
         </div>
 
-        {tab === 'analytics' ? <div className="p-4"><TransactionAnalytics data={data} /></div> : (
+        {/* ── Content ── */}
+        {tab === 'reconciliation' ? (
+          <div className="p-4">
+            <ChequeReconciliation data={data} />
+          </div>
+        ) : tab === 'analytics' ? (
+          <div className="p-4">
+            <TransactionAnalytics data={filtered} />
+          </div>
+        ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 border-b">
-                <tr>
-                  {['Date','Narration','Chq/Ref','Withdrawal','Deposit','Balance','Category','Actions'].map(h => (
-                    <th key={h} className="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {filtered.map((row, i) => (
-                  <tr key={i} className="hover:bg-gray-50">
-                    <td className="px-3 py-2.5 whitespace-nowrap">{formatDateDisplay(row.Date)}</td>
-                    <td className="px-3 py-2.5 max-w-xs truncate" title={row.Narration||row.Description}>{row.Narration||row.Description}</td>
-                    <td className="px-3 py-2.5 text-xs text-gray-400 font-mono">{row['Chq/Ref No']||'—'}</td>
-                    <td className="px-3 py-2.5 text-right font-medium text-red-600">{row['Withdrawal Amt'] ? INR.format(row['Withdrawal Amt']) : '—'}</td>
-                    <td className="px-3 py-2.5 text-right font-medium text-emerald-600">{row['Deposit Amt'] ? INR.format(row['Deposit Amt']) : '—'}</td>
-                    <td className="px-3 py-2.5 text-right font-semibold">{INR.format(row['Closing Balance']||0)}</td>
-                    <td className="px-3 py-2.5"><span className="px-2 py-0.5 rounded-full text-xs bg-gray-100">{row.Category||'—'}</span></td>
-                    <td className="px-3 py-2.5"><button onClick={() => setViewRow(row)} className="text-blue-500 text-xs">View</button></td>
+            {hasBankCols ? (
+              /* ── Full bank-statement table ── */
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 border-b border-gray-100">
+                  <tr>
+                    {['Date','Narration','Chq/Ref No','Value Date','Withdrawal','Deposit','Balance','Category','Actions'].map(h => (
+                      <th key={h} className="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase whitespace-nowrap">{h}</th>
+                    ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {filtered.map((row, i) => {
+                    const isCredit = Number(row['Deposit Amt']||0) > 0 || row.Type === 'Credit';
+                    return (
+                      <tr key={i} className="hover:bg-gray-50 transition-colors">
+                        <td className="px-3 py-2.5 whitespace-nowrap text-gray-700">{formatDateDisplay(row.Date)}</td>
+                        <td className="px-3 py-2.5 max-w-xs">
+                          <p className="truncate text-gray-800" title={row.Narration||row.Description}>{row.Narration||row.Description||'—'}</p>
+                        </td>
+                        <td className="px-3 py-2.5 text-xs text-gray-400 whitespace-nowrap font-mono">{row['Chq/Ref No']||'—'}</td>
+                        <td className="px-3 py-2.5 whitespace-nowrap text-gray-500 text-xs">{formatDateDisplay(row['Value Date'])||'—'}</td>
+                        <td className="px-3 py-2.5 whitespace-nowrap text-right font-medium text-red-600">
+                          {row['Withdrawal Amt'] ? INR.format(Number(row['Withdrawal Amt'])) : '—'}
+                        </td>
+                        <td className="px-3 py-2.5 whitespace-nowrap text-right font-medium text-emerald-600">
+                          {row['Deposit Amt'] ? INR.format(Number(row['Deposit Amt'])) : '—'}
+                        </td>
+                        <td className="px-3 py-2.5 whitespace-nowrap text-right font-semibold text-gray-700">
+                          {row['Closing Balance'] ? INR.format(Number(row['Closing Balance'])) : '—'}
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+                            {row.Category||'—'}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <div className="flex gap-2">
+                            <button onClick={() => setViewRow(row)} className="text-blue-500 hover:text-blue-700 text-xs font-medium">View</button>
+                            {isAdmin && <button onClick={() => setEditRow(row)} className="text-green-500 hover:text-green-700 text-xs font-medium">Edit</button>}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {filtered.length === 0 && (
+                    <tr>
+                      <td colSpan="9" className="px-4 py-12 text-center">
+                        <p className="text-gray-400 font-medium">No transactions found.</p>
+                        {hasActiveFilters && (
+                          <button onClick={clearAllFilters} className="mt-2 text-blue-500 text-sm hover:underline">Clear filters</button>
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            ) : (
+              /* ── Legacy table ── */
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50">
+                  <tr>
+                    {['Date','Description','Type','Amount','Category','Actions'].map(h => (
+                      <th key={h} className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200">
+                  {filtered.map((row, i) => (
+                    <tr key={i} className="hover:bg-gray-50">
+                      <td className="px-4 py-3">{formatDateDisplay(row.Date)}</td>
+                      <td className="px-4 py-3"><span className="line-clamp-1">{row.Description}</span></td>
+                      <td className="px-4 py-3">
+                        <span className={`status-badge ${(row.Type||'').toLowerCase()==='credit'?'bg-green-100 text-green-700':'bg-red-100 text-red-700'}`}>{row.Type||'Debit'}</span>
+                      </td>
+                      <td className="px-4 py-3 font-medium">{INR.format(Number(row.Amount||0))}</td>
+                      <td className="px-4 py-3">{row.Category}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex gap-2">
+                          <button onClick={() => setViewRow(row)} className="text-blue-500 text-sm">View</button>
+                          {isAdmin && <button onClick={() => setEditRow(row)} className="text-green-500 text-sm">Edit</button>}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {filtered.length === 0 && (
+                    <tr>
+                      <td colSpan="6" className="px-4 py-10 text-center">
+                        <p className="text-gray-400">No transactions found.</p>
+                        {hasActiveFilters && (
+                          <button onClick={clearAllFilters} className="mt-2 text-blue-500 text-sm hover:underline">Clear filters</button>
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            )}
           </div>
         )}
       </div>
+
       {viewRow && <TransactionViewModal row={viewRow} onClose={() => setViewRow(null)} />}
+
+      {(showAddModal || editRow) && (
+        <TransactionModal row={editRow} chartOfAccounts={chartOfAccounts} uploading={uploading}
+          onClose={() => { setShowAddModal(false); setEditRow(null); }}
+          onSave={async fd => {
+            try {
+              setUploading(true);
+              await maybeUploadField(fd, 'Transactions', 'Attachment', 'txn');
+              if (editRow) await api.upsertRow('Transactions','Serial Number',{...editRow,...fd});
+              else         await api.createRow('Transactions', fd);
+              await onRefresh();
+              setShowAddModal(false); setEditRow(null);
+              showToast('Saved', 'success');
+            } catch (e) { showToast('Failed: '+String(e),'error'); }
+            finally { setUploading(false); }
+          }} />
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Import Preview Modal
+   ═══════════════════════════════════════════════════════════ */
+function ImportPreviewModal({ step, rows, progress, error, onClear, onAppend, onCancel }) {
+  const credits  = rows.filter(r => r.Type === 'Credit');
+  const debits   = rows.filter(r => r.Type === 'Debit');
+  const totalIn  = credits.reduce((s,r) => s + Number(r['Deposit Amt']  ||r.Amount||0), 0);
+  const totalOut = debits.reduce((s,r)  => s + Number(r['Withdrawal Amt']||r.Amount||0), 0);
+
+  return (
+    <div className="modal-overlay" onClick={step==='preview'?onCancel:undefined}>
+      <div className="modal-content" style={{maxWidth:'800px',width:'95%'}} onClick={e=>e.stopPropagation()}>
+
+        <div className="p-5 border-b border-gray-200 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 bg-purple-100 rounded-xl flex items-center justify-center">
+              <svg className="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
+              </svg>
+            </div>
+            <div>
+              <h3 className="font-semibold text-gray-900">Import Bank Statement</h3>
+              <p className="text-xs text-gray-500">
+                {step==='preview'   && `${rows.length} transactions detected`}
+                {step==='importing' && `Uploading… ${progress}%`}
+                {step==='done'      && 'Import complete!'}
+              </p>
+            </div>
+          </div>
+          {step==='preview' && (
+            <button onClick={onCancel} className="text-gray-400 hover:text-gray-600">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+          )}
+        </div>
+
+        <div className="p-5 space-y-4">
+          {error && <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-3 text-sm">{error}</div>}
+
+          {step==='preview' && (
+            <>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {[
+                  {label:'Total Rows', val:rows.length, cls:'text-gray-700',    bg:'bg-gray-50 border-gray-200'},
+                  {label:'Credits',    val:credits.length, cls:'text-emerald-700', bg:'bg-emerald-50 border-emerald-200'},
+                  {label:'Debits',     val:debits.length,  cls:'text-red-700',     bg:'bg-red-50 border-red-200'},
+                  {label:'Net',        val:INR.format(totalIn-totalOut), cls:(totalIn-totalOut)>=0?'text-blue-700':'text-orange-700', bg:'bg-blue-50 border-blue-200'},
+                ].map(k=>(
+                  <div key={k.label} className={`border rounded-xl p-3 text-center ${k.bg}`}>
+                    <p className={`text-xl font-bold ${k.cls}`}>{k.val}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">{k.label}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm text-amber-800 flex gap-3">
+                <svg className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01M12 3a9 9 0 100 18A9 9 0 0012 3z"/>
+                </svg>
+                <div>
+                  <strong>Clear &amp; Import</strong> removes all existing rows then adds {rows.length} new rows.<br/>
+                  <strong>Append Data</strong> keeps existing data and adds {rows.length} rows below.
+                </div>
+              </div>
+
+              <div className="overflow-x-auto border border-gray-200 rounded-xl">
+                <table className="w-full text-xs">
+                  <thead className="bg-gray-50 border-b border-gray-200">
+                    <tr>
+                      {['Date','Narration','Chq/Ref No','Value Date','Withdrawal','Deposit','Balance','Category'].map(h=>(
+                        <th key={h} className="px-3 py-2 text-left font-semibold text-gray-500 uppercase whitespace-nowrap">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {rows.slice(0,8).map((r,i)=>(
+                      <tr key={i} className="hover:bg-gray-50">
+                        <td className="px-3 py-2 whitespace-nowrap">{formatDateDisplay(r.Date)}</td>
+                        <td className="px-3 py-2 max-w-48 truncate" title={r.Narration}>{r.Narration}</td>
+                        <td className="px-3 py-2 font-mono text-gray-400 whitespace-nowrap">{r['Chq/Ref No']||'—'}</td>
+                        <td className="px-3 py-2 whitespace-nowrap text-gray-400">{formatDateDisplay(r['Value Date'])||'—'}</td>
+                        <td className="px-3 py-2 text-right text-red-600">{r['Withdrawal Amt']?INR.format(r['Withdrawal Amt']):'—'}</td>
+                        <td className="px-3 py-2 text-right text-emerald-600">{r['Deposit Amt']?INR.format(r['Deposit Amt']):'—'}</td>
+                        <td className="px-3 py-2 text-right font-medium">{INR.format(r['Closing Balance']||0)}</td>
+                        <td className="px-3 py-2"><span className="bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded text-xs">{r.Category}</span></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {rows.length > 8 && (
+                  <p className="px-3 py-2 text-xs text-gray-400 bg-gray-50 border-t">… and {rows.length-8} more rows</p>
+                )}
+              </div>
+            </>
+          )}
+
+          {step==='importing' && (
+            <div className="py-6 space-y-3">
+              <div className="flex justify-between text-sm text-gray-600">
+                <span>Uploading transactions…</span>
+                <span className="font-semibold">{progress}%</span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-3">
+                <div className="bg-purple-600 h-3 rounded-full transition-all" style={{width:`${progress}%`}}/>
+              </div>
+              <p className="text-xs text-gray-400 text-center">Please wait — do not close this window.</p>
+            </div>
+          )}
+
+          {step==='done' && (
+            <div className="py-10 flex flex-col items-center gap-3">
+              <div className="w-14 h-14 bg-emerald-100 rounded-full flex items-center justify-center">
+                <svg className="w-7 h-7 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"/>
+                </svg>
+              </div>
+              <p className="font-semibold text-gray-800">{rows.length} transactions imported</p>
+            </div>
+          )}
+        </div>
+
+        {step==='preview' && (
+          <div className="p-5 border-t border-gray-100 flex justify-end gap-2 flex-wrap">
+            <button onClick={onCancel} className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm">Cancel</button>
+            <button onClick={onAppend} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm flex items-center gap-1.5">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"/></svg>
+              Append Data
+            </button>
+            <button onClick={onClear} className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm flex items-center gap-1.5">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+              Clear &amp; Import
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+/* ═══════════════════════════════════════════════════════════
+   ChequeReconciliation Panel
+   ═══════════════════════════════════════════════════════════ */
+function ChequeReconciliation({ data }) {
+  const { useState, useMemo } = React;
+  const [filter, setFilter] = useState('all');
+
+  const bankDebits = useMemo(() => {
+    return data.filter(t => {
+      const wd = Number(t['Withdrawal Amt'] || (t.Type === 'Debit' ? t.Amount : 0) || 0);
+      return wd > 0;
+    }).map(t => {
+      const ref = (t['Chq/Ref No'] || '').replace(/^0+/, '') || '';
+      return {
+        date: t.Date || '',
+        narration: t.Narration || t.Description || '',
+        ref,
+        amount: Number(t['Withdrawal Amt'] || (t.Type === 'Debit' ? t.Amount : 0) || 0),
+        closing: Number(t['Closing Balance'] || 0),
+      };
+    });
+  }, [data]);
+
+  const CHEQUES = [
+    {sr:1,chq:'680',party:'Enviro facility',purpose:'Technical & H.K team Bill',amount:684753,date:'09-Jan-2026',status:'Paid',clearedOn:'15-Jan-2026'},
+    {sr:2,chq:'690',party:'Petty Cash',purpose:'Tea Expenses & internal material',amount:63047,date:'08-Jan-2026',status:'Paid',clearedOn:'15-Jan-2026'},
+    {sr:3,chq:'684',party:'Inn4smart Solutions',purpose:'Sub Meter AMC',amount:79863,date:'08-Jan-2026',status:'Paid',clearedOn:'21-Jan-2026'},
+    {sr:4,chq:'685',party:'Kamal Motors',purpose:'Diesel Purchasing',amount:73354,date:'08-Jan-2026',status:'Paid',clearedOn:'20-Jan-2026'},
+    {sr:5,chq:'683',party:'R.P Enterpises',purpose:'Garbage Collection',amount:37760,date:'08-Jan-2026',status:'Paid',clearedOn:'17-Jan-2026'},
+    {sr:6,chq:'687',party:'AS Constructions',purpose:'Main Road repair work',amount:17680,date:'08-Jan-2026',status:'Paid',clearedOn:'15-Jan-2026'},
+    {sr:7,chq:'688',party:'Taj Electricals',purpose:'Submer cible Repair Work',amount:12190,date:'08-Jan-2026',status:'Paid',clearedOn:'19-Jan-2026'},
+    {sr:8,chq:'692',party:'Park smart Technologetes',purpose:'Boom Barrier Entry Exit',amount:42480,date:'09-Jan-2026',status:'Paid',clearedOn:'16-Jan-2026'},
+    {sr:9,chq:'689',party:'Shiwaji Petro',purpose:'Diesel Purchasing',amount:54562,date:'08-Jan-2026',status:'Paid',clearedOn:'15-Jan-2026'},
+    {sr:10,chq:'694',party:'Team Works',purpose:'Security',amount:337150,date:'09-Jan-2026',status:'Paid',clearedOn:'13-Jan-2026'},
+    {sr:11,chq:'682',party:'DPS Electricals',purpose:'1500 kva Transformer Rent',amount:103840,date:'08-Jan-2026',status:'Paid',clearedOn:'14-Jan-2026'},
+    {sr:12,chq:'698',party:'DHBVN Monthly Electricity',purpose:'DHBVN Monthly Electricity',amount:617432,date:'18-Jan-2026',status:'Paid',clearedOn:'19-Jan-2026'},
+    {sr:13,chq:'697',party:'Petty Cash',purpose:'Internal material & Laisoning',amount:20000,date:'15-Jan-2026',status:'Paid',clearedOn:'17-Jan-2026'},
+    {sr:14,chq:'699',party:'Enviro facility',purpose:'Technical & H.K team Bill',amount:651849,date:'30-Jan-2026',status:'Paid',clearedOn:'02-Feb-2026'},
+    {sr:15,chq:'695',party:'No Broker Technologies',purpose:'Main Gate 02 New Device',amount:8000,date:'13-Jan-2026',status:'Paid',clearedOn:'21-Feb-2026'},
+    {sr:16,chq:'701',party:'Petty Cash',purpose:'Internal material & Republic day',amount:59500,date:'30-Jan-2026',status:'Paid',clearedOn:'02-Feb-2026'},
+    {sr:17,chq:'709',party:'Shree shyam enterprises',purpose:'Fire Extingusher Rifiling',amount:126565,date:'09-Feb-2026',status:'Paid',clearedOn:'02-Dec-2026'},
+    {sr:18,chq:'708',party:'VC Enterprises',purpose:'Camera Reaparing',amount:1180,date:'09-Feb-2026',status:'Paid',clearedOn:'07-Mar-2026'},
+    {sr:19,chq:'707',party:'Inn4smart Solutions',purpose:'Sub Meter AMC',amount:26621,date:'09-Feb-2026',status:'Paid',clearedOn:'27-Feb-2026'},
+    {sr:20,chq:'706',party:'AS Constructions',purpose:'Main gate chamber repairing',amount:5896,date:'09-Feb-2026',status:'Paid',clearedOn:'16-Feb-2026'},
+    {sr:21,chq:'705',party:'Kamal Motors',purpose:'Diesel Purchasing',amount:69016,date:'09-Feb-2026',status:'Paid',clearedOn:'23-Feb-2026'},
+    {sr:22,chq:'704',party:'R.P Enterpises',purpose:'Garbage Collection',amount:18880,date:'09-Feb-2026',status:'Bounced',clearedOn:''},
+    {sr:23,chq:'710',party:'L.S Enterprises',purpose:'H.T VCB Repair',amount:0,date:'09-Feb-2026',status:'Cancel',clearedOn:''},
+    {sr:24,chq:'703',party:'Petty Cash',purpose:'Internal material & Laisoning',amount:53389,date:'09-Feb-2026',status:'Paid',clearedOn:'11-Feb-2026'},
+    {sr:25,chq:'711',party:'Petty Cash',purpose:'Advance for STP',amount:45000,date:'10-Feb-2026',status:'Paid',clearedOn:'02-Nov-2026'},
+    {sr:26,chq:'712',party:'DHBVN Monthly Electricity',purpose:'DHBVN Monthly Electricity',amount:743111,date:'10-Feb-2026',status:'Paid',clearedOn:'02-Dec-2026'},
+    {sr:27,chq:'713',party:'VC Enterprises',purpose:'Camera Reaparing',amount:10986,date:'10-Feb-2026',status:'Paid',clearedOn:'07-Mar-2026'},
+    {sr:28,chq:'715',party:'L.S Enterprises',purpose:'H.T VCB Repair',amount:28674,date:'12-Feb-2026',status:'Paid',clearedOn:'16-Feb-2026'},
+    {sr:29,chq:'716',party:'Team Works',purpose:'Security',amount:330986,date:'17-Feb-2026',status:'Paid',clearedOn:'18-Feb-2026'},
+    {sr:30,chq:'717',party:'Sun Power Company',purpose:'D.G Service 125kva',amount:51687,date:'18-Feb-2026',status:'Paid',clearedOn:'24-Feb-2026'},
+    {sr:31,chq:'718',party:'Shahrukh',purpose:'Fire Exit staire case Welding',amount:28500,date:'21-Feb-2026',status:'Paid',clearedOn:'23-Feb-2026'},
+    {sr:32,chq:'722',party:'A.S Enterprises',purpose:'L.T Room Pillar make work',amount:4816,date:'25-Feb-2026',status:'Paid',clearedOn:'07-Mar-2026'},
+    {sr:33,chq:'719',party:'Bala Ji Cement Store',purpose:'HDPE Black Pipe line purchase',amount:10800,date:'25-Feb-2026',status:'Paid',clearedOn:'02-Mar-2026'},
+    {sr:34,chq:'726',party:'Shri Ganpati pipes & Tools',purpose:'Plumbing material purchase',amount:43576,date:'26-Feb-2026',status:'Paid',clearedOn:'04-Mar-2026'},
+    {sr:35,chq:'724',party:'Petty Cash',purpose:'Internal material',amount:0,date:'26-Feb-2026',status:'Cancel',clearedOn:''},
+    {sr:36,chq:'725',party:'Petty Cash',purpose:'Internal material',amount:4751,date:'26-Feb-2026',status:'Paid',clearedOn:'02-Mar-2026'},
+    {sr:37,chq:'723',party:'Park smart Technologetes',purpose:'RFID Tags Expense',amount:70210,date:'26-Feb-2026',status:'Paid',clearedOn:'02-Mar-2026'},
+    {sr:38,chq:'728',party:'S & V SWITCHGEARS',purpose:'1600 KVA Transformer Repair',amount:0,date:'28-Feb-2026',status:'Cancel',clearedOn:''},
+    {sr:39,chq:'729',party:'DPS Electricals',purpose:'1500 kva Transformer Rent',amount:0,date:'28-Feb-2026',status:'Cancel',clearedOn:''},
+    {sr:40,chq:'730',party:'DPS Electricals',purpose:'1500 kva Transformer Rent',amount:0,date:'01-Mar-2026',status:'Bounced',clearedOn:''},
+    {sr:41,chq:'731',party:'S & V SWITCHGEARS',purpose:'1600 KVA Transformer Repair',amount:599157,date:'01-Mar-2026',status:'Paid',clearedOn:'02-Mar-2026'},
+    {sr:42,chq:'732',party:'R.P Enterpises',purpose:'Garbage Collection',amount:18880,date:'05-Mar-2026',status:'Bounced',clearedOn:''},
+    {sr:43,chq:'733',party:'Inn4smart Solutions',purpose:'Sub Meter AMC',amount:26621,date:'05-Mar-2026',status:'Pending',clearedOn:''},
+    {sr:44,chq:'734',party:'Enviro facility',purpose:'Technical & H.K team Bill',amount:703289,date:'05-Mar-2026',status:'Paid',clearedOn:'06-Mar-2026'},
+    {sr:45,chq:'735',party:'Petty Cash',purpose:'Internal material',amount:50000,date:'06-Mar-2026',status:'Paid',clearedOn:'06-Mar-2026'},
+    {sr:46,chq:'736',party:'Team Works',purpose:'Security',amount:336003,date:'07-Mar-2026',status:'Paid',clearedOn:'07-Mar-2026'},
+    {sr:47,chq:'737',party:'DPS Electricals',purpose:'1500 kva Transformer Rent',amount:94400,date:'10-Mar-2026',status:'Pending',clearedOn:''},
+    {sr:48,chq:'738',party:'Kamal Motors',purpose:'Diesel Purchasing',amount:0,date:'13-Mar-2026',status:'Cancel',clearedOn:''},
+    {sr:49,chq:'739',party:'Kamal Motors',purpose:'Diesel Purchasing',amount:61337,date:'13-Mar-2026',status:'Pending',clearedOn:''},
+    {sr:50,chq:'740',party:'Petty Cash',purpose:'Internal material',amount:15000,date:'13-Mar-2026',status:'Pending',clearedOn:''},
+    {sr:51,chq:'741',party:'Petty Cash',purpose:'Internal material',amount:25932,date:'13-Mar-2026',status:'Pending',clearedOn:''},
+    {sr:52,chq:'742',party:'KARAM ELECTRICALS',purpose:'Transformer connection',amount:5900,date:'13-Mar-2026',status:'Pending',clearedOn:''},
+    {sr:53,chq:'743',party:'DHBVN Monthly Electricity',purpose:'DHBVN Monthly Electricity',amount:574599,date:'13-Mar-2026',status:'Pending',clearedOn:''},
+    {sr:54,chq:'744',party:'KVN ENTERPRISES',purpose:'CCTV Installation Advance',amount:0,date:'17-Mar-2026',status:'Cancel',clearedOn:''},
+    {sr:55,chq:'745',party:'KVN ENTERPRISES',purpose:'CCTV Installation Advance',amount:150000,date:'17-Mar-2026',status:'Paid',clearedOn:''},
+    {sr:56,chq:'746',party:'Kamal Motors',purpose:'Diesel Purchasing',amount:113876,date:'27-Mar-2026',status:'Pending',clearedOn:''},
+    {sr:57,chq:'747',party:'Shri Ganpati pipes & Tools',purpose:'Plumbing material purchase',amount:7671,date:'27-Mar-2026',status:'Pending',clearedOn:''},
+    {sr:58,chq:'748',party:'Park smart Technologetes',purpose:'Boom Barrier Entry Exit',amount:42480,date:'27-Mar-2026',status:'Pending',clearedOn:''},
+    {sr:59,chq:'749',party:'BHARDWAJ TRADING CO.',purpose:'EID Decoration Items',amount:16711,date:'27-Mar-2026',status:'Pending',clearedOn:''},
+    {sr:60,chq:'750',party:'M.S ENGINEER WORK SHOP',purpose:'125 KVA D.G Repairing',amount:0,date:'28-Mar-2026',status:'Cancel',clearedOn:''},
+    {sr:61,chq:'751',party:'M.S ENGINEER WORK SHOP',purpose:'125 KVA D.G Repairing',amount:15458,date:'28-Mar-2026',status:'Pending',clearedOn:''},
+  ];
+
+  const enriched = useMemo(() => {
+    return CHEQUES.map(c => {
+      const bankMatch = bankDebits.find(b => {
+        const bRef = b.ref.replace(/^0+/, '');
+        return bRef === c.chq && Math.abs(b.amount - c.amount) < 1;
+      });
+      const actualStatus = c.status === 'Bounced' ? 'Bounced'
+        : c.status === 'Cancel' ? 'Cancel'
+        : bankMatch ? 'Cleared'
+        : c.status === 'Paid' ? 'Paid (Unverified)'
+        : 'Pending';
+      return { ...c, bankMatch, actualStatus };
+    });
+  }, [bankDebits]);
+
+  const filtered_cheques = useMemo(() => {
+    if (filter === 'all')       return enriched;
+    if (filter === 'matched')   return enriched.filter(c => c.actualStatus === 'Cleared');
+    if (filter === 'unmatched') return enriched.filter(c => ['Pending','Paid (Unverified)'].includes(c.actualStatus));
+    if (filter === 'bounced')   return enriched.filter(c => c.actualStatus === 'Bounced');
+    if (filter === 'cancelled') return enriched.filter(c => c.actualStatus === 'Cancel');
+    return enriched;
+  }, [enriched, filter]);
+
+  const summary = useMemo(() => {
+    const cleared    = enriched.filter(c => c.actualStatus === 'Cleared');
+    const bounced    = enriched.filter(c => c.actualStatus === 'Bounced');
+    const cancelled  = enriched.filter(c => c.actualStatus === 'Cancel');
+    const pending    = enriched.filter(c => ['Pending','Paid (Unverified)'].includes(c.actualStatus));
+    return {
+      total: enriched.length,
+      cleared: cleared.length, clearedAmt: cleared.reduce((s,c)=>s+c.amount,0),
+      bounced: bounced.length, bouncedAmt: bounced.reduce((s,c)=>s+c.amount,0),
+      cancelled: cancelled.length,
+      pending: pending.length, pendingAmt: pending.reduce((s,c)=>s+c.amount,0),
+    };
+  }, [enriched]);
+
+  const statusBadge = (status) => {
+    const cfg = {
+      'Cleared':          'bg-green-100 text-green-700',
+      'Paid (Unverified)':'bg-yellow-100 text-yellow-700',
+      'Pending':          'bg-orange-100 text-orange-700',
+      'Bounced':          'bg-red-100 text-red-700',
+      'Cancel':           'bg-gray-100 text-gray-500',
+    };
+    return <span className={`status-badge text-xs ${cfg[status]||'bg-gray-100 text-gray-500'}`}>{status}</span>;
+  };
+
+  if (bankDebits.length === 0) {
+    return (
+      <div className="text-center py-16 text-gray-400">
+        <svg className="w-12 h-12 mx-auto mb-3 text-gray-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+        </svg>
+        <p className="text-sm font-medium">No bank statement data loaded yet.</p>
+        <p className="text-xs mt-1">Import the HDFC bank statement first using the Import Statement button.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {[
+          {label:'Cleared in Bank', val:summary.cleared, sub:INR.format(summary.clearedAmt), color:'#10b981', filter:'matched'},
+          {label:'Pending/Unverified', val:summary.pending, sub:INR.format(summary.pendingAmt), color:'#f97316', filter:'unmatched'},
+          {label:'Bounced', val:summary.bounced, sub:summary.bounced>0?INR.format(summary.bouncedAmt):'—', color:'#ef4444', filter:'bounced'},
+          {label:'Cancelled', val:summary.cancelled, sub:'Zero-amount cheques', color:'#9ca3af', filter:'cancelled'},
+        ].map(({label,val,sub,color,filter:f}) => (
+          <div key={label} onClick={() => setFilter(filter===f?'all':f)}
+            className={`bg-white rounded-xl p-4 shadow-sm cursor-pointer transition-all hover:shadow-md ${filter===f?'ring-2':''}` }>
+            <p className="text-xs text-gray-500">{label}</p>
+            <p className="text-2xl font-bold mt-1" style={{color}}>{val}</p>
+            <p className="text-xs text-gray-400 mt-0.5">{sub}</p>
+          </div>
+        ))}
+      </div>
+
+      {summary.bounced > 0 && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-sm">
+          <div className="flex items-start gap-3">
+            <svg className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            <div>
+              <p className="font-semibold text-red-800">{summary.bounced} Bounced Cheque{summary.bounced>1?'s':''} Detected</p>
+              <p className="text-red-700 text-xs mt-1">
+                Chq #704 — R.P Enterpises ₹18,880 (Feb 2026) · Chq #732 — R.P Enterpises ₹18,880 (Mar 2026)
+              </p>
+              <p className="text-red-600 text-xs mt-1">Bank charged ₹59 return fee per bounce. Follow up with vendor.</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {summary.pending > 0 && (
+        <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 text-sm">
+          <div className="flex items-start gap-3">
+            <svg className="w-5 h-5 text-orange-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            <div>
+              <p className="font-semibold text-orange-800">{summary.pending} Cheques Not Yet Found in Bank Statement</p>
+              <p className="text-orange-700 text-xs mt-1">Total exposure: {INR.format(summary.pendingAmt)}.</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="flex gap-2 flex-wrap">
+        {[['all','All Cheques'],['matched','Cleared'],['unmatched','Pending'],['bounced','Bounced'],['cancelled','Cancelled']].map(([f,label]) => (
+          <button key={f} onClick={() => setFilter(f)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${filter===f?'bg-blue-500 text-white':'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
+            {label} ({f==='all'?enriched.length:f==='matched'?summary.cleared:f==='unmatched'?summary.pending:f==='bounced'?summary.bounced:summary.cancelled})
+          </button>
+        ))}
+      </div>
+
+      <div className="bg-white rounded-2xl shadow-sm overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50">
+            <tr>
+              {['#','Chq No.','Party','Purpose','Chq Amount','Bank Amount','Chq Date','Cleared Date','Status','Match'].map(h => (
+                <th key={h} className="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase whitespace-nowrap">{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {filtered_cheques.map(c => (
+              <tr key={c.sr} className={`hover:bg-gray-50 transition-colors ${c.actualStatus==='Bounced'?'bg-red-50':''}`}>
+                <td className="px-3 py-2.5 text-xs text-gray-400">{c.sr}</td>
+                <td className="px-3 py-2.5 font-mono font-semibold text-gray-800">{c.chq}</td>
+                <td className="px-3 py-2.5"><p className="text-gray-800 font-medium max-w-[140px] truncate" title={c.party}>{c.party}</p></td>
+                <td className="px-3 py-2.5 text-gray-500 max-w-[160px] truncate text-xs" title={c.purpose}>{c.purpose}</td>
+                <td className="px-3 py-2.5 text-right font-semibold text-gray-800 whitespace-nowrap">
+                  {c.amount > 0 ? INR.format(c.amount) : <span className="text-gray-400">—</span>}
+                </td>
+                <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                  {c.bankMatch ? <span className="font-semibold text-emerald-600">{INR.format(c.bankMatch.amount)}</span> : <span className="text-gray-300">—</span>}
+                </td>
+                <td className="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">{c.date}</td>
+                <td className="px-3 py-2.5 text-xs text-gray-500 whitespace-nowrap">
+                  {c.bankMatch ? c.bankMatch.date : (c.clearedOn || <span className="text-gray-300">—</span>)}
+                </td>
+                <td className="px-3 py-2.5">{statusBadge(c.actualStatus)}</td>
+                <td className="px-3 py-2.5">
+                  {c.bankMatch ? (
+                    <div className="flex items-center gap-1">
+                      <svg className="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"/></svg>
+                      <span className="text-xs text-emerald-600 font-medium">Matched</span>
+                    </div>
+                  ) : c.actualStatus === 'Cancel' ? (
+                    <span className="text-xs text-gray-400">N/A</span>
+                  ) : (
+                    <div className="flex items-center gap-1">
+                      <svg className="w-4 h-4 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                      <span className="text-xs text-orange-500 font-medium">Not found</span>
+                    </div>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div className="px-4 py-3 border-t border-gray-100 bg-gray-50 flex items-center justify-between text-xs text-gray-500">
+          <span>{filtered_cheques.length} cheques shown</span>
+          <span className="font-semibold text-gray-700">Total: {INR.format(filtered_cheques.reduce((s,c)=>s+c.amount,0))}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   TransactionViewModal
+   ═══════════════════════════════════════════════════════════ */
+function TransactionViewModal({ row, onClose }) {
+  const bankCols = ['Date','Narration','Chq/Ref No','Value Date','Withdrawal Amt','Deposit Amt','Closing Balance','Type','Category','Description','Attachment'];
+  const legacyCols = ['Date','Description','Type','Amount','Category','Attachment'];
+  const hasBankCols = 'Narration' in row || 'Deposit Amt' in row;
+  const cols = hasBankCols ? bankCols : legacyCols;
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-content" onClick={e=>e.stopPropagation()}>
+        <div className="p-6 border-b border-gray-200 flex items-center justify-between">
+          <h3 className="text-lg font-semibold">Transaction Details</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </div>
+        <div className="p-6 grid grid-cols-2 gap-x-6 gap-y-4">
+          {cols.filter(c => c in row).map(col => (
+            <div key={col} className={col==='Narration'||col==='Description'?'col-span-2':''}>
+              <label className="block text-xs font-semibold text-gray-400 uppercase mb-1">{col}</label>
+              {col==='Attachment' && row[col] ? (
+                <a href={row[col]} target="_blank" rel="noopener noreferrer" className="text-blue-500 text-sm hover:underline">View File</a>
+              ) : (
+                <p className="text-sm text-gray-800 break-words">
+                  {(col==='Withdrawal Amt'||col==='Deposit Amt'||col==='Closing Balance'||col==='Amount') && row[col]
+                    ? INR.format(Number(row[col]))
+                    : (col==='Date'||col==='Value Date')
+                    ? formatDateDisplay(row[col])
+                    : row[col] || '—'}
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+        <div className="p-5 border-t border-gray-100 flex justify-end">
+          <button onClick={onClose} className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm">Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   TransactionModal (Add / Edit)
+   ═══════════════════════════════════════════════════════════ */
+function TransactionModal({ row, chartOfAccounts, uploading, onClose, onSave }) {
+  const { useState, useMemo } = React;
+  const isNew = !row;
+  const [fd, setFd] = useState(row || {
+    Date: new Date().toISOString().split('T')[0],
+    Narration:'', Description:'', Type:'Credit',
+    'Deposit Amt':'', 'Withdrawal Amt':'',
+    Amount:'', Category:'', 'Chq/Ref No':'',
+    'Value Date':'', 'Closing Balance':'', Attachment:''
+  });
+  const set = (k,v) => setFd(p=>({...p,[k]:v}));
+
+  const categories = useMemo(() =>
+    chartOfAccounts.filter(c => (c.Group||'').toLowerCase() === (fd.Type.toLowerCase()==='credit'?'income':'expense')),
+  [chartOfAccounts, fd.Type]);
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-content" onClick={e=>e.stopPropagation()}>
+        <div className="p-5 border-b border-gray-200">
+          <h3 className="font-semibold text-gray-900">{isNew?'Add':'Edit'} Transaction</h3>
+        </div>
+        <div className="p-5 space-y-4 overflow-y-auto" style={{maxHeight:'65vh'}}>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Date</label>
+              <input type="date" value={fd.Date} onChange={e=>set('Date',e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"/>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Type</label>
+              <select value={fd.Type} onChange={e=>set('Type',e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                <option value="Credit">Credit (Deposit)</option>
+                <option value="Debit">Debit (Withdrawal)</option>
+              </select>
+            </div>
+            <div className="col-span-2">
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Narration / Description</label>
+              <input type="text" value={fd.Narration||fd.Description} onChange={e=>{set('Narration',e.target.value);set('Description',e.target.value);}}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"/>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">
+                {fd.Type==='Credit'?'Deposit Amount':'Withdrawal Amount'}
+              </label>
+              <input type="number" value={fd.Type==='Credit'?fd['Deposit Amt']:fd['Withdrawal Amt']}
+                onChange={e=>{
+                  const k = fd.Type==='Credit'?'Deposit Amt':'Withdrawal Amt';
+                  set(k,e.target.value); set('Amount',e.target.value);
+                }}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"/>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Category</label>
+              <select value={fd.Category} onChange={e=>set('Category',e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                <option value="">Auto / Select</option>
+                {categories.map((c,i)=><option key={i} value={c.Category}>{c.Category}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Chq / Ref No</label>
+              <input type="text" value={fd['Chq/Ref No']||''} onChange={e=>set('Chq/Ref No',e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"/>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Value Date</label>
+              <input type="date" value={fd['Value Date']||''} onChange={e=>set('Value Date',e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"/>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Closing Balance</label>
+              <input type="number" value={fd['Closing Balance']||''} onChange={e=>set('Closing Balance',e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"/>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Attachment</label>
+              <input type="file" onChange={e=>{const f=e.target.files[0];if(f){const r=new FileReader();r.onload=()=>set('Attachment',r.result);r.readAsDataURL(f);}}}
+                className="w-full text-xs text-gray-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:bg-blue-50 file:text-blue-700"/>
+            </div>
+          </div>
+        </div>
+        <div className="p-5 border-t border-gray-100 flex justify-end gap-2">
+          <button onClick={onClose} disabled={uploading} className="px-4 py-2 border border-gray-300 rounded-lg text-sm hover:bg-gray-50 disabled:opacity-50">Cancel</button>
+          <button onClick={()=>onSave(fd)} disabled={uploading}
+            className="px-4 py-2 bg-blue-500 text-white rounded-lg text-sm hover:bg-blue-600 disabled:opacity-50 flex items-center gap-2">
+            {uploading && <div className="spinner" style={{width:'14px',height:'14px',borderWidth:'2px'}}/>}
+            {uploading?'Saving…':'Save'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
