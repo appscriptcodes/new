@@ -320,6 +320,8 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
   const [tab, setTab] = useState('table');
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState(null);
+  const [filterMonth, setFilterMonth] = useState('');
+  const [filterYear, setFilterYear] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
   const [viewRow, setViewRow] = useState(null);
   const [editRow, setEditRow] = useState(null);
@@ -331,24 +333,48 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
   const [importProgress, setImportProgress] = useState(0);
   const fileRef = useRef(null);
 
+  /* ── Derive available years & months from data ── */
+  const availableYears = useMemo(() => {
+    const years = new Set();
+    data.forEach(t => { if (t.Date) years.add(t.Date.substring(0, 4)); });
+    return Array.from(years).sort((a, b) => b.localeCompare(a));
+  }, [data]);
+
+  const availableMonths = useMemo(() => {
+    const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+    if (!filterYear) {
+      // Show all months that exist across all data
+      const months = new Set();
+      data.forEach(t => { if (t.Date) months.add(t.Date.substring(5, 7)); });
+      return Array.from(months).sort().map(m => ({ value: m, label: MONTH_NAMES[+m - 1] }));
+    }
+    const months = new Set();
+    data.forEach(t => {
+      if (t.Date && t.Date.startsWith(filterYear)) months.add(t.Date.substring(5, 7));
+    });
+    return Array.from(months).sort().map(m => ({ value: m, label: MONTH_NAMES[+m - 1] }));
+  }, [data, filterYear]);
+
   const stats = useMemo(() => {
     const getAmt = (t, type) => {
       if (type === 'credit') return Number(t['Deposit Amt'] || (t.Type === 'Credit' ? t.Amount : 0) || 0);
       return Number(t['Withdrawal Amt'] || (t.Type === 'Debit' ? t.Amount : 0) || 0);
     };
-    const income  = data.reduce((s,t) => s + getAmt(t,'credit'), 0);
-    const expense = data.reduce((s,t) => s + getAmt(t,'debit'),  0);
+    const income  = filtered.reduce((s,t) => s + getAmt(t,'credit'), 0);
+    const expense = filtered.reduce((s,t) => s + getAmt(t,'debit'),  0);
     return { income, expense, net: income - expense };
-  }, [data]);
+  }, [filtered]);
 
   const filtered = useMemo(() => {
     let r = data;
     if (typeFilter === 'credit') r = r.filter(t => t.Type === 'Credit' || Number(t['Deposit Amt']||0) > 0);
     if (typeFilter === 'debit')  r = r.filter(t => t.Type === 'Debit'  || Number(t['Withdrawal Amt']||0) > 0);
+    if (filterYear)  r = r.filter(t => t.Date && t.Date.startsWith(filterYear));
+    if (filterMonth) r = r.filter(t => t.Date && t.Date.substring(5, 7) === filterMonth);
     if (!search.trim()) return r;
     const q = search.toLowerCase();
     return r.filter(row => Object.values(row).some(v => String(v).toLowerCase().includes(q)));
-  }, [data, search, typeFilter]);
+  }, [data, search, typeFilter, filterYear, filterMonth]);
 
   function onFilePick(e) {
     const file = e.target.files[0];
@@ -411,12 +437,56 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
 
       <div className="bg-white rounded-2xl shadow-sm">
         <div className="p-4 border-b border-gray-100 flex items-center justify-between flex-wrap gap-3">
-          <div className="flex bg-gray-100 rounded-lg p-1 gap-1">
-            {[['table','Transactions'],['analytics','Analytics']].map(([id,label]) => (
-              <button key={id} onClick={() => setTab(id)} className={`px-4 py-1.5 rounded-md text-sm font-medium ${tab===id?'bg-white shadow-sm':'text-gray-500'}`}>{label}</button>
-            ))}
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex bg-gray-100 rounded-lg p-1 gap-1">
+              {[['table','Transactions'],['analytics','Analytics']].map(([id,label]) => (
+                <button key={id} onClick={() => setTab(id)} className={`px-4 py-1.5 rounded-md text-sm font-medium ${tab===id?'bg-white shadow-sm':'text-gray-500'}`}>{label}</button>
+              ))}
+            </div>
+            {/* Active filter badge */}
+            {(filterYear || filterMonth) && (
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-indigo-50 text-indigo-700 border border-indigo-200">
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M1.5 2A.5.5 0 0 1 2 1.5h12a.5.5 0 0 1 .354.854L10 6.707V13.5a.5.5 0 0 1-.724.447l-4-2A.5.5 0 0 1 5 11.5V6.707L1.646 2.354A.5.5 0 0 1 1.5 2z"/></svg>
+                {[filterYear, filterMonth ? new Date(2000, +filterMonth - 1).toLocaleString('default',{month:'long'}) : ''].filter(Boolean).join(' · ')}
+                &nbsp;·&nbsp;{filtered.length} record{filtered.length !== 1 ? 's' : ''}
+              </span>
+            )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* ── Year filter ── */}
+            <select
+              value={filterYear}
+              onChange={e => { setFilterYear(e.target.value); setFilterMonth(''); }}
+              className="px-3 py-1.5 border rounded-lg text-sm bg-white text-gray-700"
+            >
+              <option value="">All Years</option>
+              {availableYears.map(y => (
+                <option key={y} value={y}>{y}</option>
+              ))}
+            </select>
+
+            {/* ── Month filter ── */}
+            <select
+              value={filterMonth}
+              onChange={e => setFilterMonth(e.target.value)}
+              className="px-3 py-1.5 border rounded-lg text-sm bg-white text-gray-700"
+              disabled={availableMonths.length === 0}
+            >
+              <option value="">All Months</option>
+              {availableMonths.map(({ value, label }) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
+            </select>
+
+            {/* ── Clear filters ── */}
+            {(filterYear || filterMonth || typeFilter || search) && (
+              <button
+                onClick={() => { setFilterYear(''); setFilterMonth(''); setTypeFilter(null); setSearch(''); }}
+                className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm text-gray-500 hover:bg-gray-50"
+                title="Clear all filters"
+              >✕ Clear</button>
+            )}
+
             <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search…" className="px-3 py-1.5 border rounded-lg text-sm" />
             {isAdmin && <button onClick={() => fileRef.current?.click()} className="bg-purple-600 text-white px-3 py-1.5 rounded-lg text-sm">Import</button>}
             <input ref={fileRef} type="file" style={{display:'none'}} onChange={onFilePick} />
