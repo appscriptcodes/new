@@ -355,16 +355,6 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
     return Array.from(months).sort().map(m => ({ value: m, label: MONTH_NAMES[+m - 1] }));
   }, [data, filterYear]);
 
-  const stats = useMemo(() => {
-    const getAmt = (t, type) => {
-      if (type === 'credit') return Number(t['Deposit Amt'] || (t.Type === 'Credit' ? t.Amount : 0) || 0);
-      return Number(t['Withdrawal Amt'] || (t.Type === 'Debit' ? t.Amount : 0) || 0);
-    };
-    const income  = filtered.reduce((s,t) => s + getAmt(t,'credit'), 0);
-    const expense = filtered.reduce((s,t) => s + getAmt(t,'debit'),  0);
-    return { income, expense, net: income - expense };
-  }, [filtered]);
-
   const filtered = useMemo(() => {
     let r = data;
     if (typeFilter === 'credit') r = r.filter(t => t.Type === 'Credit' || Number(t['Deposit Amt']||0) > 0);
@@ -375,6 +365,16 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
     const q = search.toLowerCase();
     return r.filter(row => Object.values(row).some(v => String(v).toLowerCase().includes(q)));
   }, [data, search, typeFilter, filterYear, filterMonth]);
+
+  const stats = useMemo(() => {
+    const getAmt = (t, type) => {
+      if (type === 'credit') return Number(t['Deposit Amt'] || (t.Type === 'Credit' ? t.Amount : 0) || 0);
+      return Number(t['Withdrawal Amt'] || (t.Type === 'Debit' ? t.Amount : 0) || 0);
+    };
+    const income  = filtered.reduce((s,t) => s + getAmt(t,'credit'), 0);
+    const expense = filtered.reduce((s,t) => s + getAmt(t,'debit'),  0);
+    return { income, expense, net: income - expense };
+  }, [filtered]);
 
   function onFilePick(e) {
     const file = e.target.files[0];
