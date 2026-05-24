@@ -243,7 +243,7 @@ function TransactionAnalytics({ data }) {
           <div key={k.label} className={`${k.bg} border ${k.border} rounded-xl p-4`}>
             <p className="text-xs font-medium text-gray-500 mb-1">{k.label}</p>
             <p className={`text-xl font-bold ${k.color} leading-tight`}>{k.val}</p>
-            <p className="text-xs text-gray-400 mt-1">{k.sub}</p>
+           <p className="text-xs text-gray-400 mt-1">{filtered.length}/{data.length} transactions</p>
           </div>
         ))}
       </div>
@@ -364,9 +364,42 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
   }, [data, search, typeFilter, filterYear, filterMonth]);
 
   /* Summary stats — uses filtered so cards reflect active filters */
+/* Available years & months for dropdowns */
+  const availableYears = useMemo(() => {
+    const years = new Set();
+    data.forEach(t => { if (t.Date) years.add(t.Date.substring(0, 4)); });
+    return Array.from(years).sort((a, b) => b.localeCompare(a));
+  }, [data]);
+
+  const availableMonths = useMemo(() => {
+    const MONTH_NAMES = ['January','February','March','April','May','June',
+      'July','August','September','October','November','December'];
+    const months = new Set();
+    data.forEach(t => {
+      if (t.Date && (!filterYear || t.Date.startsWith(filterYear)))
+        months.add(t.Date.substring(5, 7));
+    });
+    return Array.from(months).sort().map(m => ({ value: m, label: MONTH_NAMES[+m - 1] }));
+  }, [data, filterYear]);
+
+  /* Filtered rows — MUST be before stats */
+  const filtered = useMemo(() => {
+    let r = data;
+    if (typeFilter === 'credit') r = r.filter(t => t.Type === 'Credit' || Number(t['Deposit Amt']||0) > 0);
+    if (typeFilter === 'debit')  r = r.filter(t => t.Type === 'Debit'  || Number(t['Withdrawal Amt']||0) > 0);
+    if (filterYear)  r = r.filter(t => t.Date && t.Date.startsWith(filterYear));
+    if (filterMonth) r = r.filter(t => t.Date && t.Date.substring(5, 7) === filterMonth);
+    if (!search.trim()) return r;
+    const q = search.toLowerCase();
+    return r.filter(row => Object.values(row).some(v => String(v).toLowerCase().includes(q)));
+  }, [data, search, typeFilter, filterYear, filterMonth]);
+
+  /* Summary stats — uses filtered so cards update with filters */
   const stats = useMemo(() => {
     const getAmt = (t, type) => {
-      if (type === 'credit') return Number(t['Deposit Amt'] || (t.Type === 'Credit' ? t.Amount : 0) || 0);
+      if (type === 'credit') {
+        return Number(t['Deposit Amt'] || (t.Type === 'Credit' ? t.Amount : 0) || 0);
+      }
       return Number(t['Withdrawal Amt'] || (t.Type === 'Debit' ? t.Amount : 0) || 0);
     };
     const income  = filtered.reduce((s,t) => s + getAmt(t,'credit'), 0);
@@ -440,32 +473,34 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
               <button key={id} onClick={() => setTab(id)} className={`px-4 py-1.5 rounded-md text-sm font-medium ${tab===id?'bg-white shadow-sm':'text-gray-500'}`}>{label}</button>
             ))}
           </div>
-          <div className="flex items-center gap-2">
-            {/* Year & Month filters */}
-            <select value={filterYear}
-              onChange={e => { setFilterYear(e.target.value); setFilterMonth(''); }}
-              className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm bg-white text-gray-700">
-              <option value="">All Years</option>
-              {availableYears.map(y => <option key={y} value={y}>{y}</option>)}
-            </select>
-            <select value={filterMonth}
-              onChange={e => setFilterMonth(e.target.value)}
-              className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm bg-white text-gray-700"
-              disabled={availableMonths.length === 0}>
-              <option value="">All Months</option>
-              {availableMonths.map(({ value, label }) => (
-                <option key={value} value={value}>{label}</option>
-              ))}
-            </select>
-            {(filterYear || filterMonth || typeFilter || search) && (
-              <button
-                onClick={() => { setFilterYear(''); setFilterMonth(''); setTypeFilter(null); setSearch(''); }}
-                className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm text-gray-500 hover:bg-gray-50">✕ Clear</button>
-            )}
-            <input type="text" value={search} onChange={e => setSearch(e.target.value)}
-              placeholder="Search…" className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm" />
-            {isAdmin && <button onClick={() => fileRef.current?.click()} className="bg-purple-600 text-white px-3 py-1.5 rounded-lg text-sm">Import</button>}
-            <input ref={fileRef} type="file" style={{display:'none'}} onChange={onFilePick} />
+<div className="flex items-center gap-2 flex-wrap">
+              <select value={filterYear}
+                onChange={e => { setFilterYear(e.target.value); setFilterMonth(''); }}
+                className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm bg-white text-gray-700">
+                <option value="">All Years</option>
+                {availableYears.map(y => <option key={y} value={y}>{y}</option>)}
+              </select>
+              <select value={filterMonth}
+                onChange={e => setFilterMonth(e.target.value)}
+                className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm bg-white text-gray-700"
+                disabled={availableMonths.length === 0}>
+                <option value="">All Months</option>
+                {availableMonths.map(({ value, label }) => (
+                  <option key={value} value={value}>{label}</option>
+                ))}
+              </select>
+              {(filterYear || filterMonth || typeFilter || search) && (
+                <button
+                  onClick={() => { setFilterYear(''); setFilterMonth(''); setTypeFilter(null); setSearch(''); }}
+                  className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm text-gray-500 hover:bg-gray-50">
+                  ✕ Clear
+                </button>
+              )}
+              {tab === 'table' && (
+                <input type="text" value={search} onChange={e => setSearch(e.target.value)}
+                  placeholder="Search…" className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm" />
+              )}
+              <ExportButton data={filtered} filename="Transactions" />
           </div>
         </div>
 
