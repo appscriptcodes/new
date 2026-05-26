@@ -702,7 +702,7 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
                 <tbody className="divide-y divide-gray-200">
                   {filtered.map((row, i) => (
                     <tr key={i} className="hover:bg-gray-50">
-                      <td className="px-4 py-3">{formatDateDisplay(row.Date)}</td>
+                      <td className="px-4 py-3">{formatMonthYear(row.Date)}</td>
                       <td className="px-4 py-3"><span className="line-clamp-1">{row.Description}</span></td>
                       <td className="px-4 py-3">
                         <span className={`status-badge ${(row.Type||'').toLowerCase()==='credit'?'bg-green-100 text-green-700':'bg-red-100 text-red-700'}`}>{row.Type||'Debit'}</span>
