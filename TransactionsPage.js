@@ -350,7 +350,9 @@ function TransactionAnalytics({ data }) {
   );
 }
 
-/* ═══════════════════════════════════════════════════════════
+
+/* ── 1. Date Normalizer (Handles 01/11/25 format) ── */
+v/* ═══════════════════════════════════════════════════════════
    Main TransactionsPage Component
    ═══════════════════════════════════════════════════════════ */
 /* ═══════════════════════════════════════════════════════════
@@ -660,7 +662,7 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
                 <tbody className="divide-y divide-gray-100">
                   {filtered.map((row, i) => (
                     <tr key={i} className="hover:bg-gray-50 transition-colors">
-                      <td className="px-3 py-2.5 whitespace-nowrap text-gray-700">{formatDateDisplay(row.Date)}</td>
+                      <td className="px-3 py-2.5 whitespace-nowrap text-gray-900 font-medium">   {formatMonthYear(normDate(row.Date))} </td>
                       <td className="px-3 py-2.5 max-w-xs">
                         <p className="truncate text-gray-800" title={row.Narration||row.Description}>{row.Narration||row.Description||'—'}</p>
                       </td>
