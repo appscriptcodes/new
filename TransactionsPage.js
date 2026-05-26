@@ -52,16 +52,6 @@ function normDate(val) {
   return s;
 }
 
-/* ── Display Formatter: "2025-11-01" → "Nov 2025" ── */
-const MONTH_LABELS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-
-function formatMonthYear(dateStr) {
-  const normalized = normDate(dateStr);
-  if (!normalized || !normalized.includes('-')) return dateStr;
-  const [y, m] = normalized.split('-');
-  return `${MONTH_LABELS[parseInt(m) - 1]} ${y}`;
-}
-
 /* ── Bank statement XLS/XLSX parser (SheetJS, runs in browser) ── */
 function parseBankStatement(workbook) {
   const ws  = workbook.Sheets[workbook.SheetNames[0]];
@@ -638,7 +628,7 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b border-gray-100">
                   <tr>
-                    {['Period','Narration','Chq/Ref No','Value Date','Withdrawal','Deposit','Balance','Category','Actions'].map(h => (
+                    {['Date','Narration','Chq/Ref No','Value Date','Withdrawal','Deposit','Balance','Category','Actions'].map(h => (
                       <th key={h} className="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase whitespace-nowrap">{h}</th>
                     ))}
                   </tr>
@@ -648,7 +638,7 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
                     const isCredit = Number(row['Deposit Amt']||0) > 0 || row.Type === 'Credit';
                     return (
                       <tr key={i} className="hover:bg-gray-50 transition-colors">
-                        {/* Updated to show Month and Year only */} <td className="px-3 py-2.5 whitespace-nowrap text-gray-900 font-bold">   {formatMonthYear(row.Date)} </td>
+                        <td className="px-3 py-2.5 whitespace-nowrap text-gray-700">{formatDateDisplay(row.Date)}</td>
                         <td className="px-3 py-2.5 max-w-xs">
                           <p className="truncate text-gray-800" title={row.Narration||row.Description}>{row.Narration||row.Description||'—'}</p>
                         </td>
@@ -702,7 +692,7 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
                 <tbody className="divide-y divide-gray-200">
                   {filtered.map((row, i) => (
                     <tr key={i} className="hover:bg-gray-50">
-                      <td className="px-4 py-3">{formatMonthYear(row.Date)}</td>
+                      <td className="px-4 py-3">{formatDateDisplay(row.Date)}</td>
                       <td className="px-4 py-3"><span className="line-clamp-1">{row.Description}</span></td>
                       <td className="px-4 py-3">
                         <span className={`status-badge ${(row.Type||'').toLowerCase()==='credit'?'bg-green-100 text-green-700':'bg-red-100 text-red-700'}`}>{row.Type||'Debit'}</span>
