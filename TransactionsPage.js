@@ -488,9 +488,20 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
   }, [data, search, typeFilter, filterYear, filterMonth]);
 
   /* ── 3. Summary Stats ── */
+/* ── 3. Summary Stats ── */
   const stats = useMemo(() => {
-    const income = filtered.reduce((s, t) => s + Number(t['Deposit Amt'] || (t.Type === 'Credit' ? t.Amount : 0) || 0), 0);
-    const expense = filtered.reduce((s, t) => s + Number(t['Withdrawal Amt'] || (t.Type === 'Debit' ? t.Amount : 0) || 0), 0);
+    const income = filtered.reduce((s, t) => {
+      // Check for 'Deposit Amt.' (with dot), 'Deposit Amt', or generic 'Amount'
+      const val = t['Deposit Amt.'] || t['Deposit Amt'] || (t.Type === 'Credit' ? t.Amount : 0) || 0;
+      return s + Number(String(val).replace(/,/g, ''));
+    }, 0);
+
+    const expense = filtered.reduce((s, t) => {
+      // Check for 'Withdrawal Amt.' (with dot), 'Withdrawal Amt', or generic 'Amount'
+      const val = t['Withdrawal Amt.'] || t['Withdrawal Amt'] || (t.Type === 'Debit' ? t.Amount : 0) || 0;
+      return s + Number(String(val).replace(/,/g, ''));
+    }, 0);
+
     return { income, expense, net: income - expense };
   }, [filtered]);
 
