@@ -388,65 +388,113 @@ function TransactionAnalytics({ data }) {
 function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
   const { useState, useMemo, useRef } = React;
 
-  const [tab,             setTab]             = useState('table');
-  const [search,          setSearch]          = useState('');
-  const [typeFilter,      setTypeFilter]      = useState(null);
-  /* ── NEW: month/year filter state ── */
-  const [filterYear,      setFilterYear]      = useState('');
-  const [filterMonth,     setFilterMonth]     = useState('');
-  const [showAddModal,    setShowAddModal]     = useState(false);
-  const [viewRow,         setViewRow]         = useState(null);
-  const [editRow,         setEditRow]         = useState(null);
-  const [uploading,       setUploading]       = useState(false);
+  const [tab, setTab] = useState('table');
+  const [search, setSearch] = useState('');
+  const [typeFilter, setTypeFilter] = useState(null);
+  const [filterYear, setFilterYear] = useState('');
+  const [filterMonth, setFilterMonth] = useState('');
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [viewRow, setViewRow] = useState(null);
+  const [editRow, setEditRow] = useState(null);
+  const [uploading, setUploading] = useState(false);
 
   /* Import state */
-  const [importStep,      setImportStep]      = useState('idle');
-  const [importRows,      setImportRows]      = useState([]);
-  const [importError,     setImportError]     = useState('');
-  const [importProgress,  setImportProgress]  = useState(0);
+  const [importStep, setImportStep] = useState('idle');
+  const [importRows, setImportRows] = useState([]);
+  const [importError, setImportError] = useState('');
+  const [importProgress, setImportProgress] = useState(0);
   const fileRef = useRef(null);
 
-  /* ── Available years derived from data ── */
+  /* ── 1. Robust Year & Month Extractor ── */
   const availableYears = useMemo(() => {
     const years = new Set();
-    data.forEach(t => { if (t.Date) years.add(t.Date.substring(0, 4)); });
-    return Array.from(years).sort((a, b) => b.localeCompare(a)); // newest first
+    data.forEach(t => {
+      if (t.Year && String(t.Year).trim().length === 4) {
+        years.add(String(t.Year).trim());
+      } else if (t.Date) {
+        const parts = t.Date.split(/[-/]/);
+        const last = parts[parts.length - 1];
+        if (last?.length === 4) years.add(last);
+        else if (last?.length === 2) years.add("20" + last);
+      }
+    });
+    return Array.from(years).sort((a, b) => b - a);
   }, [data]);
 
-  /* ── Available months: only months that exist within the selected year ── */
   const availableMonths = useMemo(() => {
-    const MONTH_NAMES = ['January','February','March','April','May','June',
-      'July','August','September','October','November','December'];
+    if (!filterYear) return [];
     const months = new Set();
+    const monthNames = {
+      "01":"January","02":"February","03":"March","04":"April","05":"May","06":"June",
+      "07":"July","08":"August","09":"September","10":"October","11":"November","12":"December"
+    };
+
     data.forEach(t => {
-      if (t.Date && (!filterYear || t.Date.startsWith(filterYear)))
-        months.add(t.Date.substring(5, 7));
+      let y = '', m = '';
+      if (t.Year && String(t.Year).trim() === filterYear) {
+        y = filterYear;
+        m = String(t.Month || '').trim().padStart(2, '0');
+      } else if (t.Date) {
+        const parts = t.Date.split(/[-/]/);
+        y = parts[parts.length - 1].length === 2 ? "20" + parts[parts.length - 1] : parts[parts.length - 1];
+        if (y === filterYear) {
+          const mid = parts[1] || '';
+          if (isNaN(mid)) {
+            const idx = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"].indexOf(mid.toLowerCase().substring(0, 3));
+            if (idx !== -1) m = String(idx + 1).padStart(2, '0');
+          } else {
+            m = mid.padStart(2, '0');
+          }
+        }
+      }
+      if (y === filterYear && monthNames[m]) months.add(m);
     });
-    return Array.from(months).sort().map(m => ({ value: m, label: MONTH_NAMES[+m - 1] }));
+
+    return Array.from(months).sort().map(m => ({ value: m, label: monthNames[m] }));
   }, [data, filterYear]);
 
-  /* ── Filtered rows — applies type + year + month + search ── */
+  /* ── 2. The Filter Engine (The missing link) ── */
   const filtered = useMemo(() => {
-    let r = data;
-    if (typeFilter === 'credit') r = r.filter(t => t.Type === 'Credit' || Number(t['Deposit Amt']||0) > 0);
-    if (typeFilter === 'debit')  r = r.filter(t => t.Type === 'Debit'  || Number(t['Withdrawal Amt']||0) > 0);
-    if (filterYear)  r = r.filter(t => t.Date && t.Date.startsWith(filterYear));
-    if (filterMonth) r = r.filter(t => t.Date && t.Date.substring(5, 7) === filterMonth);
-    if (!search.trim()) return r;
-    const q = search.toLowerCase();
-    return r.filter(row => Object.values(row).some(v => String(v).toLowerCase().includes(q)));
+    return data.filter(t => {
+      // Search Filter
+      const s = search.toLowerCase();
+      const matchesSearch = !search || 
+        (t.Narration || t.Description || '').toLowerCase().includes(s) ||
+        (t.Party || '').toLowerCase().includes(s) ||
+        (t.Category || '').toLowerCase().includes(s);
+
+      // Type Filter
+      const matchesType = !typeFilter || t.Type?.toLowerCase() === typeFilter.toLowerCase();
+
+      // Year & Month Logic for Filtering
+      let rowYear = '', rowMonth = '';
+      if (t.Year && String(t.Year).trim().length === 4) {
+        rowYear = String(t.Year).trim();
+        rowMonth = String(t.Month || '').trim().padStart(2, '0');
+      } else if (t.Date) {
+        const parts = t.Date.split(/[-/]/);
+        rowYear = parts[parts.length - 1].length === 2 ? "20" + parts[parts.length - 1] : parts[parts.length - 1];
+        const mid = parts[1] || '';
+        rowMonth = isNaN(mid) 
+          ? String(["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"].indexOf(mid.toLowerCase().substring(0, 3)) + 1).padStart(2, '0')
+          : mid.padStart(2, '0');
+      }
+
+      const matchesYear = !filterYear || rowYear === filterYear;
+      const matchesMonth = !filterMonth || rowMonth === filterMonth;
+
+      return matchesSearch && matchesType && matchesYear && matchesMonth;
+    });
   }, [data, search, typeFilter, filterYear, filterMonth]);
 
-  /* ── Summary stats — reactive to active filters ── */
+  /* ── 3. Summary Stats ── */
   const stats = useMemo(() => {
-    const getAmt = (t, type) => {
-      if (type === 'credit') return Number(t['Deposit Amt'] || (t.Type === 'Credit' ? t.Amount : 0) || 0);
-      return Number(t['Withdrawal Amt'] || (t.Type === 'Debit' ? t.Amount : 0) || 0);
-    };
-    const income  = filtered.reduce((s,t) => s + getAmt(t,'credit'), 0);
-    const expense = filtered.reduce((s,t) => s + getAmt(t,'debit'),  0);
+    const income = filtered.reduce((s, t) => s + Number(t['Deposit Amt'] || (t.Type === 'Credit' ? t.Amount : 0) || 0), 0);
+    const expense = filtered.reduce((s, t) => s + Number(t['Withdrawal Amt'] || (t.Type === 'Debit' ? t.Amount : 0) || 0), 0);
     return { income, expense, net: income - expense };
   }, [filtered]);
+
+  /* ... Keep your existing onFilePick, doImport, and clearAllFilters functions here ... */
 
   /* File picked for import */
   function onFilePick(e) {
