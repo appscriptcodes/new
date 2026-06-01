@@ -5,6 +5,13 @@
    =================================================== */
 
 /* ── Auto-categoriser based on narration patterns ── */
+/* ===================================================
+   TransactionsPage.js — Transactions Page & Modals
+   Global Hillview Society Portal
+   Full bank-statement columns + Analytics dashboard
+   =================================================== */
+
+/* ── Updated Auto-categoriser using new Column Data ── */
 function autoCategory(narration, type) {
   const n = (narration || '').toUpperCase();
   // Credits
@@ -28,82 +35,107 @@ function autoCategory(narration, type) {
   if (n.includes('DHBVN') || n.includes('BIJLI VITRAN')) return 'Electricity (DHBVN)';
   if (n.includes('CHQ RETURN CHGS'))                   return 'Bank Charges';
   if (n.includes('CHQ PAID') || n.includes('CTS'))     return 'Cheque Payment';
-  if (n.includes('PAWAN') || n.includes('SANDEEP'))    return 'Petty Cash';
-  if (n.includes('RTGS DR'))                           return 'RTGS Payment';
-  if (n.includes('FT - DR') || (n.includes('FT') && n.includes('DR'))) return 'Fund Transfer Out';
-  if (n.includes('NEFT'))                              return 'NEFT Payment';
-  if (n.includes('UPI'))                               return 'UPI Payment';
-  if (n.includes('IMPS'))                              return 'IMPS Payment';
-  if (n.includes('ATM'))                               return 'ATM';
-  if (n.includes('ELECTRICITY') || n.includes('ELEC')) return 'Electricity';
-  if (n.includes('REPAIR') || n.includes('MAINTAIN'))  return 'Repairs & Maintenance';
-  if (n.includes('INTEREST'))                          return 'Interest';
   return 'Other Expense';
 }
 
-/* ── Date normaliser: "29/11/25" or "29/11/2025" → "2025-11-29" ── */
+/* Helper to convert dates cleanly into standard form if needed */
 function normDate(val) {
   if (!val) return '';
-  const s = String(val).trim();
-  const m2 = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/);
-  const m4 = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (m2) { const [,d,mo,y]=m2; return `20${y}-${mo.padStart(2,'0')}-${d.padStart(2,'0')}`; }
-  if (m4) { const [,d,mo,y]=m4; return `${y}-${mo.padStart(2,'0')}-${d.padStart(2,'0')}`; }
-  return s;
+  const dStr = String(val).trim();
+  if (dStr.includes('-')) return dStr; 
+  if (dStr.includes('/')) {
+    const parts = dStr.split('/');
+    if (parts.length === 3) {
+      let y = parts[2];
+      if (y.length === 2) y = "20" + y;
+      return `${parts[0].padStart(2,'0')}-${parts[1].padStart(2,'0')}-${y}`;
+    }
+  }
+  return dStr;
 }
 
-/* ── Bank statement XLS/XLSX parser (SheetJS, runs in browser) ── */
+/* Helper to map natural word months into the matching numerical keys expected by portal views */
+function convertMonthToNumber(monthStr) {
+  if (!monthStr) return '';
+  const m = String(monthStr).trim().toLowerCase();
+  const lookup = {
+    'january': '01', 'jan': '01', '01': '01',
+    'february': '02', 'feb': '02', '02': '02',
+    'march': '03', 'mar': '03', '03': '03',
+    'april': '04', 'apr': '04', '04': '04',
+    'may': '05', '05': '05',
+    'june': '06', 'jun': '06', '06': '06',
+    'july': '07', 'jul': '07', '07': '07',
+    'august': '08', 'aug': '08', '08': '08',
+    'september': '09', 'sep': '09', '09': '09',
+    'october': '10', 'oct': '10', '10': '10',
+    'november': '11', 'nov': '11', '11': '11',
+    'december': '12', 'dec': '12', '12': '12'
+  };
+  return lookup[m] || monthStr.padStart(2, '0');
+}
+
+/* ── Updated Bank Statement Parser supporting full extended schema ── */
 function parseBankStatement(workbook) {
   const ws  = workbook.Sheets[workbook.SheetNames[0]];
   const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: false });
 
   let headerIdx = -1;
+  // Dynamic header line identification across both legacy files and your new format
   for (let i = 0; i < raw.length; i++) {
     const row = raw[i] || [];
-    if (row.some(c => String(c||'').trim()==='Date') &&
-        row.some(c => String(c||'').toLowerCase().includes('narration'))) {
-      headerIdx = i; break;
+    if (row.some(c => ['Serial Number', 'Date', 'Narration'].includes(String(c||'').trim()))) {
+      headerIdx = i; 
+      break;
     }
   }
-  if (headerIdx === -1) throw new Error('Header row not found — is this an HDFC statement?');
+  if (headerIdx === -1) throw new Error('Valid spreadsheet columns not detected. Ensure headers match perfectly.');
 
-  const hdr    = raw[headerIdx].map(h => String(h||'').trim());
-  const col    = k => hdr.findIndex(h => h.toLowerCase().includes(k.toLowerCase()));
-  const idxDate= col('Date');
-  const idxNar = col('Narration');
-  const idxRef = col('Chq');
-  const idxVdt = col('Value');
-  const idxWd  = col('Withdrawal');
-  const idxDep = col('Deposit');
-  const idxBal = col('Closing');
-
+  const hdr = raw[headerIdx].map(h => String(h||'').trim());
   const out = [];
+
   for (let i = headerIdx + 1; i < raw.length; i++) {
-    const row = raw[i];
-    if (!row || !row[idxDate]) continue;
-    const dateStr = String(row[idxDate]||'').trim();
-    if (!dateStr || dateStr.startsWith('*') || dateStr.length < 5) continue;
-    const wd  = parseFloat(String(row[idxWd] ||'').replace(/,/g,'')) || 0;
-    const dep = parseFloat(String(row[idxDep]||'').replace(/,/g,'')) || 0;
-    const bal = parseFloat(String(row[idxBal]||'').replace(/,/g,'')) || 0;
-    if (wd === 0 && dep === 0) continue;
-    const type    = dep > 0 ? 'Credit' : 'Debit';
-    const narr    = String(row[idxNar]||'').trim();
-    const refNo   = String(row[idxRef]||'').trim();
-    const valueDt = normDate(row[idxVdt]);
+    const rowArr = raw[i];
+    if (!rowArr || rowArr.length < 2) continue;
+
+    // Assemble row properties indexed under their original headers
+    const row = {};
+    hdr.forEach((h, idx) => {
+      row[h] = rowArr[idx] !== undefined ? String(rowArr[idx]).trim() : '';
+    });
+
+    const rawDate = row['Date'] || '';
+    if (!rawDate || rawDate.startsWith('*') || rawDate.length < 5) continue;
+
+    // Standardizing values
+    const normalizedDate = normDate(rawDate);
+    const dateParts = normalizedDate.split('-');
+    
+    // Fallback extraction mechanics if manual columns aren't filled on specific rows
+    const derivedYear = row['Year'] || dateParts[2] || '';
+    const derivedMonth = convertMonthToNumber(row['Month'] || dateParts[1] || '');
+
+    const amt = parseFloat(String(row['Amount'] || row['Withdrawal Amt.'] || row['Deposit Amt.'] || '0').replace(/,/g,'')) || 0;
+    const resolvedType = row['Type'] || (parseFloat(row['Deposit Amt.']) > 0 ? 'Credit' : 'Debit');
+
     out.push({
-      Date:              normDate(dateStr),
-      Narration:         narr,
-      'Chq/Ref No':      refNo,
-      'Value Date':      valueDt,
-      'Withdrawal Amt':  wd   || '',
-      'Deposit Amt':     dep  || '',
-      'Closing Balance': bal,
-      Type:              type,
-      Amount:            dep > 0 ? dep : wd,
-      Category:          autoCategory(narr, type),
-      Description:       narr,
-      Attachment:        ''
+      'Serial Number':   row['Serial Number'] || String(i - headerIdx),
+      'Date':            normalizedDate,
+      'Type':            resolvedType,
+      'Chq/Ref Number':  row['Chq/Ref Number'] || row['Chq./Ref.No.'] || '',
+      'Category':        row['Category'] || autoCategory(row['Description'] || row['Narration'], resolvedType),
+      'Amount':          Math.abs(amt),
+      'Party':           row['Party'] || '',
+      'Description':     row['Description'] || row['Narration'] || '',
+      'Cost Center':     row['Cost Center'] || 'General',
+      'Payment Mode':    row['Payment Mode'] || 'Bank',
+      'Ref/Invoice':     row['Ref/Invoice'] || '',
+      'Attachment':      row['Attachment'] || '',
+      'Cleared?':        row['Cleared?'] || 'Yes',
+      'Year':            String(derivedYear),
+      'Month':           String(derivedMonth),
+      'Value Date':      normDate(row['Value Dt'] || rawDate),
+      'Closing Balance': parseFloat(String(row['Closing Balance'] || '0').replace(/,/g,'')) || 0
     });
   }
   return out;
