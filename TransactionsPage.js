@@ -385,148 +385,90 @@ function TransactionAnalytics({ data }) {
 /* ═══════════════════════════════════════════════════════════
    Main TransactionsPage Component
    ═══════════════════════════════════════════════════════════ */
+/* ===================================================
+   TransactionsPage Component — Unified Version
+   =================================================== */
+function getFinancialYears() {
+  const years = [];
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth(); 
+  let startYear = (currentMonth < 3) ? currentYear - 1 : currentYear;
+
+  for (let i = 0; i < 5; i++) {
+    const y = startYear - i;
+    years.push({
+      label: `FY ${y}-${(y + 1).toString().slice(-2)}`,
+      start: new Date(y, 3, 1),      // April 1st
+      end: new Date(y + 1, 2, 31, 23, 59, 59) // March 31st
+    });
+  }
+  return years;
+}
+
 function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
   const { useState, useMemo, useRef } = React;
 
+  // 1. Basic State
   const [tab, setTab] = useState('table');
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState(null);
-  const [filterYear, setFilterYear] = useState('');
-  const [filterMonth, setFilterMonth] = useState('');
+  const [selectedFY, setSelectedFY] = useState('All'); // Added for your dropdown
+  
+  // Modals & Progress
   const [showAddModal, setShowAddModal] = useState(false);
   const [viewRow, setViewRow] = useState(null);
   const [editRow, setEditRow] = useState(null);
   const [uploading, setUploading] = useState(false);
 
-  /* Import state */
-  const [importStep, setImportStep] = useState('idle');
-  const [importRows, setImportRows] = useState([]);
-  const [importError, setImportError] = useState('');
-  const [importProgress, setImportProgress] = useState(0);
-  const fileRef = useRef(null);
+  const fiscalYears = useMemo(() => getFinancialYears(), []);
 
-  /* ── 1. Robust Year & Month Extractor ── */
-  const availableYears = useMemo(() => {
-    const years = new Set();
-    data.forEach(t => {
-      if (t.Year && String(t.Year).trim().length === 4) {
-        years.add(String(t.Year).trim());
-      } else if (t.Date) {
-        const parts = t.Date.split(/[-/]/);
-        const last = parts[parts.length - 1];
-        if (last?.length === 4) years.add(last);
-        else if (last?.length === 2) years.add("20" + last);
-      }
-    });
-    return Array.from(years).sort((a, b) => b - a);
-  }, [data]);
-
-  const availableMonths = useMemo(() => {
-    if (!filterYear) return [];
-    const months = new Set();
-    const monthNames = {
-      "01":"January","02":"February","03":"March","04":"April","05":"May","06":"June",
-      "07":"July","08":"August","09":"September","10":"October","11":"November","12":"December"
-    };
-
-    data.forEach(t => {
-      let y = '', m = '';
-      if (t.Year && String(t.Year).trim() === filterYear) {
-        y = filterYear;
-        m = String(t.Month || '').trim().padStart(2, '0');
-      } else if (t.Date) {
-        const parts = t.Date.split(/[-/]/);
-        y = parts[parts.length - 1].length === 2 ? "20" + parts[parts.length - 1] : parts[parts.length - 1];
-        if (y === filterYear) {
-          const mid = parts[1] || '';
-          if (isNaN(mid)) {
-            const idx = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"].indexOf(mid.toLowerCase().substring(0, 3));
-            if (idx !== -1) m = String(idx + 1).padStart(2, '0');
-          } else {
-            m = mid.padStart(2, '0');
-          }
-        }
-      }
-      if (y === filterYear && monthNames[m]) months.add(m);
-    });
-
-    return Array.from(months).sort().map(m => ({ value: m, label: monthNames[m] }));
-  }, [data, filterYear]);
-
-  /* ── 2. The Filter Engine (The missing link) ── */
+  // 2. Updated Filter Logic (Combines Search + Fiscal Year + Balance Support)
   const filtered = useMemo(() => {
-    return data.filter(t => {
-      // Search Filter
+    const transactions = Array.isArray(data) ? data : (data.Transactions || []);
+    
+    return transactions.filter(t => {
+      // A. Text Search
       const s = search.toLowerCase();
       const matchesSearch = !search || 
-        (t.Narration || t.Description || '').toLowerCase().includes(s) ||
-        (t.Party || '').toLowerCase().includes(s) ||
-        (t.Category || '').toLowerCase().includes(s);
+        JSON.stringify(t).toLowerCase().includes(s);
 
-      // Type Filter
+      // B. Type Filter
       const matchesType = !typeFilter || t.Type?.toLowerCase() === typeFilter.toLowerCase();
 
-      // Year & Month Logic for Filtering
-      let rowYear = '', rowMonth = '';
-      if (t.Year && String(t.Year).trim().length === 4) {
-        rowYear = String(t.Year).trim();
-        rowMonth = String(t.Month || '').trim().padStart(2, '0');
-      } else if (t.Date) {
-        const parts = t.Date.split(/[-/]/);
-        rowYear = parts[parts.length - 1].length === 2 ? "20" + parts[parts.length - 1] : parts[parts.length - 1];
-        const mid = parts[1] || '';
-        rowMonth = isNaN(mid) 
-          ? String(["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"].indexOf(mid.toLowerCase().substring(0, 3)) + 1).padStart(2, '0')
-          : mid.padStart(2, '0');
+      // C. Financial Year Filter
+      let matchesFY = true;
+      if (selectedFY !== 'All') {
+        const fy = fiscalYears.find(f => f.label === selectedFY);
+        const tDate = new Date(t.Date);
+        matchesFY = tDate >= fy.start && tDate <= fy.end;
       }
 
-      const matchesYear = !filterYear || rowYear === filterYear;
-      const matchesMonth = !filterMonth || rowMonth === filterMonth;
+      return matchesSearch && matchesType && matchesFY;
+    }).sort((a, b) => new Date(b.Date) - new Date(a.Date)); // Newest first
+  }, [data, search, typeFilter, selectedFY, fiscalYears]);
 
-      return matchesSearch && matchesType && matchesYear && matchesMonth;
-    });
-  }, [data, search, typeFilter, filterYear, filterMonth]);
-
-  /* ── 3. Summary Stats ── */
-/* ── 3. Summary Stats ── */
+  // 3. Updated Stats (Supports 'Closing Balance' and 'Amount')
   const stats = useMemo(() => {
     const income = filtered.reduce((s, t) => {
-      // Check for 'Deposit Amt.' (with dot), 'Deposit Amt', or generic 'Amount'
       const val = t['Deposit Amt.'] || t['Deposit Amt'] || (t.Type === 'Credit' ? t.Amount : 0) || 0;
       return s + Number(String(val).replace(/,/g, ''));
     }, 0);
 
     const expense = filtered.reduce((s, t) => {
-      // Check for 'Withdrawal Amt.' (with dot), 'Withdrawal Amt', or generic 'Amount'
       const val = t['Withdrawal Amt.'] || t['Withdrawal Amt'] || (t.Type === 'Debit' ? t.Amount : 0) || 0;
       return s + Number(String(val).replace(/,/g, ''));
     }, 0);
 
-    return { income, expense, net: income - expense };
+    // Get latest balance from the most recent transaction in the filtered list
+    const latestBalance = filtered.length > 0 
+      ? (filtered[0]['Closing Balance'] || filtered[0]['Balance'] || 0) 
+      : 0;
+
+    return { income, expense, net: income - expense, currentBalance: latestBalance };
   }, [filtered]);
 
-  /* ... Keep your existing onFilePick, doImport, and clearAllFilters functions here ... */
-
-  /* File picked for import */
-  function onFilePick(e) {
-    const file = e.target.files[0];
-    if (!file) return;
-    setImportError('');
-    if (typeof XLSX === 'undefined') { setImportError('SheetJS not loaded. Please refresh.'); return; }
-    const reader = new FileReader();
-    reader.onload = evt => {
-      try {
-        const wb   = XLSX.read(evt.target.result, { type:'binary', cellText:true, cellDates:false });
-        const rows = parseBankStatement(wb);
-        if (!rows.length) { setImportError('No transactions found. Is this an HDFC bank statement?'); return; }
-        setImportRows(rows);
-        setImportStep('preview');
-      } catch (err) { setImportError('Parse error: ' + String(err)); }
-    };
-    reader.readAsBinaryString(file);
-    e.target.value = '';
-  }
-
+  /* ... rest of your code (onFilePick, doImport, etc.) ... */
   async function doImport(clearFirst) {
     setImportStep('importing'); setImportProgress(0);
     try {
