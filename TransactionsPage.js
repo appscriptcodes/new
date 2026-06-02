@@ -35,6 +35,8 @@ function autoCategory(narration, type) {
   if (n.includes('DHBVN') || n.includes('BIJLI VITRAN')) return 'Electricity (DHBVN)';
   if (n.includes('CHQ RETURN CHGS'))                   return 'Bank Charges';
   if (n.includes('CHQ PAID') || n.includes('CTS'))     return 'Cheque Payment';
+  if (n.includes('CHQ PAID') || n.includes('CTS') || n.includes('S & V SWITCHGEARS') || n.includes('S V SWITCHGEARS'))
+    return 'Cheque Payment';
   return 'Other Expense';
 }
 
@@ -53,6 +55,41 @@ function normDate(val) {
   }
   return dStr;
 }
+
+/* ── Standardized Date Display Function ── */
+function formatDateDisplay(dateStr) {
+  if (!dateStr) return '—';
+  try {
+    // Handle YYYY-MM-DD format
+    if (dateStr.includes('-') && dateStr.length === 10) {
+      const [y, m, d] = dateStr.split('-');
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      return `${d}-${months[parseInt(m)-1]}-${y}`;
+    }
+    // Handle DD/MM/YYYY format
+    if (dateStr.includes('/')) {
+      const parts = dateStr.split('/');
+      if (parts.length === 3) {
+        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const d = parts[0].padStart(2, '0');
+        const m = parseInt(parts[1]);
+        const y = parts[2].length === 2 ? '20' + parts[2] : parts[2];
+        return `${d}-${months[m-1]}-${y}`;
+      }
+    }
+    return dateStr;
+  } catch (e) {
+    return dateStr || '—';
+  }
+}
+
+/* INR Formatter for currency */
+const INR = {
+  format: (val) => {
+    if (!val || isNaN(val)) return '₹0';
+    return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(val);
+  }
+};
 
 /* Helper to map natural word months into the matching numerical keys expected by portal views */
 function convertMonthToNumber(monthStr) {
@@ -168,15 +205,31 @@ function TransactionAnalytics({ data }) {
     const credits = data.filter(t => t.Type === 'Credit' || (t['Deposit Amt'] && Number(t['Deposit Amt']) > 0));
     const debits  = data.filter(t => t.Type === 'Debit'  || (t['Withdrawal Amt'] && Number(t['Withdrawal Amt']) > 0));
 
-    const totalIn  = credits.reduce((s,t) => s + Number(t['Deposit Amt']  || t.Amount || 0), 0);
-    const totalOut = debits.reduce((s,t)  => s + Number(t['Withdrawal Amt']|| t.Amount || 0), 0);
+    const totalIn  = credits.reduce((s,t) => s + Number(String(t.Amount || t['Deposit Amt']  || 0).replace(/,/g,'')), 0);
+    const totalOut = debits.reduce((s,t)  => s + Number(String(t.Amount || t['Withdrawal Amt'] || 0).replace(/,/g,'')), 0);
 
     /* Monthly bucketing */
     const monthMap = {};
     data.forEach(t => {
       const d = t.Date || '';
       if (!d) return;
-      const ym = d.substring(0, 7); // "2025-11"
+      // Normalize to YYYY-MM regardless of stored format
+      let ym = '';
+      if (/^\d{4}-\d{2}/.test(d)) {
+        ym = d.substring(0, 7);                      // already YYYY-MM-DD
+      } else if (d.includes('/')) {
+        const [dd, mm, yy] = d.split('/');
+        const fullY = yy.length === 2 ? '20' + yy : yy;
+        ym = `${fullY}-${mm.padStart(2,'0')}`;       // DD/MM/YY → YYYY-MM
+      } else if (d.includes('-')) {
+        const parts = d.split('-');
+        if (parts[0].length <= 2) {                  // DD-MM-YYYY
+          ym = `${parts[2]}-${parts[1].padStart(2,'0')}`;
+        } else {
+          ym = d.substring(0, 7);
+        }
+      }
+      if (!ym) return;
       if (!monthMap[ym]) monthMap[ym] = { label: ym, credit: 0, debit: 0, count: 0 };
       const dep = Number(t['Deposit Amt']  || (t.Type === 'Credit' ? t.Amount : 0) || 0);
       const wd  = Number(t['Withdrawal Amt']|| (t.Type === 'Debit'  ? t.Amount : 0) || 0);
@@ -187,12 +240,23 @@ function TransactionAnalytics({ data }) {
     const months = Object.values(monthMap).sort((a,b) => a.label.localeCompare(b.label));
 
     /* Category breakdown */
+    const GENERIC_CATS = new Set(['income', 'expense', 'other', 'other income', 'other expense', '']);
     const catMap = {};
     data.forEach(t => {
-      const cat = t.Category || 'Other';
+const stored = (t.Category || '').trim();
+      const narration = t.Description || t.Narration || t.description || t.narration || '';
+      const cat = (t.Vendor && t.Vendor.trim())
+        ? t.Vendor.trim()
+        : GENERIC_CATS.has(stored.toLowerCase())
+          ? autoCategory(narration, t.Type)
+          : stored;
       if (!catMap[cat]) catMap[cat] = { credit: 0, debit: 0, count: 0 };
-      catMap[cat].credit += Number(t['Deposit Amt']  || (t.Type === 'Credit' ? t.Amount : 0) || 0);
-      catMap[cat].debit  += Number(t['Withdrawal Amt']|| (t.Type === 'Debit'  ? t.Amount : 0) || 0);
+      const amt = Number(String(t.Amount || t['Deposit Amt'] || t['Withdrawal Amt'] || 0).replace(/,/g,''));
+      if (t.Type === 'Credit') {
+        catMap[cat].credit += amt;
+      } else {
+        catMap[cat].debit += amt;
+      }
       catMap[cat].count++;
     });
     const categories = Object.entries(catMap)
@@ -233,7 +297,10 @@ function TransactionAnalytics({ data }) {
   );
 
   const MONTH_LABELS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const fmtMonth = ym => { const [y,m] = ym.split('-'); return `${MONTH_LABELS[+m-1]} ${y.slice(2)}`; };
+  const fmtMonth = ym => {
+    const [y,m] = ym.split('-');
+    return (MONTH_LABELS[+m-1] || '?') + ' ' + (y ? y.slice(2) : '');
+  };
 
   const maxMonthCredit = Math.max(...analytics.months.map(m => m.credit), 1);
   const maxMonthDebit  = Math.max(...analytics.months.map(m => m.debit),  1);
@@ -362,7 +429,7 @@ function TransactionAnalytics({ data }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
-              {analytics.categories.slice(0,12).map(cat => (
+              {analytics.categories.slice(0).map(cat => (
                 <tr key={cat.name} className="hover:bg-gray-50">
                   <td className="py-2 pr-4 font-medium text-gray-700">{cat.name}</td>
                   <td className="py-2 pr-4 text-gray-500">{cat.count}</td>
@@ -394,6 +461,13 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
   const [filterYear, setFilterYear] = useState('');
   const [filterMonth, setFilterMonth] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
+  
+  // Custom date range filters
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+  
+  // Indian financial year filter (FY 2024-25, 2025-26, etc.)
+  const [filterIndianFY, setFilterIndianFY] = useState('');
   const [viewRow, setViewRow] = useState(null);
   const [editRow, setEditRow] = useState(null);
   const [uploading, setUploading] = useState(false);
@@ -404,6 +478,43 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
   const [importError, setImportError] = useState('');
   const [importProgress, setImportProgress] = useState(0);
   const fileRef = useRef(null);
+
+  /* ── Helper: Get Indian Financial Year from date ── */
+  function getIndianFY(dateStr) {
+    if (!dateStr) return '';
+    try {
+      const parts = dateStr.split(/[-/]/);
+      let year = parseInt(parts[parts.length - 1]);
+      if (year < 100) year += 2000;
+      const month = parseInt(parts[1] || 1);
+      
+      // Indian FY runs from April (month 4) to March (month 3)
+      if (month >= 4) {
+        return `FY ${year}-${String(year + 1).slice(2)}`;
+      } else {
+        return `FY ${year - 1}-${String(year).slice(2)}`;
+      }
+    } catch (e) {
+      return '';
+    }
+  }
+
+  /* ── Helper: Get all available Indian FYs from data ── */
+  const availableIndianFYs = useMemo(() => {
+    const fySet = new Set();
+    data.forEach(t => {
+      if (t.Date) {
+        const fy = getIndianFY(t.Date);
+        if (fy) fySet.add(fy);
+      }
+    });
+    // Sort descending (newest first)
+    return Array.from(fySet).sort((a, b) => {
+      const aYear = parseInt(a.split(' ')[1]);
+      const bYear = parseInt(b.split(' ')[1]);
+      return bYear - aYear;
+    });
+  }, [data]);
 
   /* ── 1. Robust Year & Month Extractor ── */
   const availableYears = useMemo(() => {
@@ -483,9 +594,49 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
       const matchesYear = !filterYear || rowYear === filterYear;
       const matchesMonth = !filterMonth || rowMonth === filterMonth;
 
-      return matchesSearch && matchesType && matchesYear && matchesMonth;
+      // Custom Date Range Filter
+// Custom Date Range Filter
+      let matchesDateRange = true;
+      if (fromDate || toDate) {
+        // Normalize the stored date to YYYY-MM-DD for reliable string comparison
+        // Stored formats may be DD/MM/YY, DD-MM-YYYY, or already YYYY-MM-DD
+        const toISO = (raw) => {
+          if (!raw) return '';
+          const s = String(raw).trim();
+          // Already YYYY-MM-DD
+          if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+          // DD/MM/YY or DD/MM/YYYY
+          if (s.includes('/')) {
+            const [d, m, y] = s.split('/');
+            const fullY = y.length === 2 ? '20' + y : y;
+            return `${fullY}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
+          }
+          // DD-MM-YYYY
+          if (s.includes('-')) {
+            const parts = s.split('-');
+            if (parts[0].length <= 2) {            // DD-MM-YYYY
+              return `${parts[2]}-${parts[1].padStart(2,'0')}-${parts[0].padStart(2,'0')}`;
+            }
+          }
+          return s;
+        };
+        const txnISO = toISO(t.Date);
+        if (txnISO) {
+          if (fromDate && txnISO < fromDate) matchesDateRange = false;
+          if (toDate   && txnISO > toDate)   matchesDateRange = false;
+        }
+      }
+
+      // Indian Financial Year Filter
+      let matchesIndianFY = true;
+      if (filterIndianFY) {
+        const txnFY = getIndianFY(t.Date);
+        matchesIndianFY = txnFY === filterIndianFY;
+      }
+
+      return matchesSearch && matchesType && matchesYear && matchesMonth && matchesDateRange && matchesIndianFY;
     });
-  }, [data, search, typeFilter, filterYear, filterMonth]);
+  }, [data, search, typeFilter, filterYear, filterMonth, fromDate, toDate, filterIndianFY]);
 
   /* ── 3. Summary Stats ── */
 /* ── 3. Summary Stats ── */
@@ -502,7 +653,19 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
       return s + Number(String(val).replace(/,/g, ''));
     }, 0);
 
-    return { income, expense, net: income - expense };
+    // Get latest closing balance from filtered data
+    let closingBalance = 0;
+    if (filtered.length > 0) {
+      // Find the most recent transaction with a closing balance
+      for (let i = filtered.length - 1; i >= 0; i--) {
+        if (filtered[i]['Closing Balance']) {
+          closingBalance = Number(String(filtered[i]['Closing Balance']).replace(/,/g, ''));
+          break;
+        }
+      }
+    }
+
+    return { income, expense, net: income - expense, closingBalance };
   }, [filtered]);
 
   /* ... Keep your existing onFilePick, doImport, and clearAllFilters functions here ... */
@@ -548,9 +711,9 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
   const hasBankCols = data.length > 0 && ('Narration' in data[0] || 'Deposit Amt' in data[0]);
 
   /* ── Clear all filters helper ── */
-  const hasActiveFilters = filterYear || filterMonth || typeFilter || search;
+  const hasActiveFilters = filterYear || filterMonth || typeFilter || search || fromDate || toDate || filterIndianFY;
   function clearAllFilters() {
-    setFilterYear(''); setFilterMonth(''); setTypeFilter(null); setSearch('');
+    setFilterYear(''); setFilterMonth(''); setTypeFilter(null); setSearch(''); setFromDate(''); setToDate(''); setFilterIndianFY('');
   }
 
   return (
@@ -566,7 +729,7 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
       )}
 
       {/* ── Summary Cards ── */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div onClick={() => setTypeFilter(typeFilter==='credit'?null:'credit')}
           className={`bg-white rounded-xl p-4 shadow-sm cursor-pointer transition-all ${typeFilter==='credit'?'ring-2 ring-emerald-500':'hover:shadow-md'}`}>
           <p className="text-xs text-gray-500 font-medium">Total Credits</p>
@@ -583,6 +746,11 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
           <p className="text-xs text-gray-500 font-medium">Net Flow</p>
           <p className={`text-2xl font-bold mt-1 ${stats.net>=0?'text-blue-600':'text-orange-600'}`}>{INR.format(stats.net)}</p>
           <p className="text-xs text-gray-400 mt-1">{filtered.length} of {data.length} transactions</p>
+        </div>
+        <div className="bg-white rounded-xl p-4 shadow-sm border-2 border-purple-200">
+          <p className="text-xs text-gray-500 font-medium">Current Balance</p>
+          <p className="text-2xl font-bold text-purple-600 mt-1">{INR.format(stats.closingBalance)}</p>
+          <p className="text-xs text-gray-400 mt-1">Latest closing balance</p>
         </div>
       </div>
 
@@ -626,6 +794,36 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
                   <option key={value} value={value}>{label}</option>
                 ))}
               </select>
+
+              {/* ── Indian Financial Year filter ── */}
+              <select
+                value={filterIndianFY}
+                onChange={e => setFilterIndianFY(e.target.value)}
+                className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-300"
+              >
+                <option value="">All FY</option>
+                {availableIndianFYs.map(fy => <option key={fy} value={fy}>{fy}</option>)}
+              </select>
+
+              {/* ── Custom Date Range: From Date ── */}
+              <input
+                type="date"
+                value={fromDate}
+                onChange={e => setFromDate(e.target.value)}
+                placeholder="From"
+                title="Filter from date"
+                className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-300"
+              />
+
+              {/* ── Custom Date Range: To Date ── */}
+              <input
+                type="date"
+                value={toDate}
+                onChange={e => setToDate(e.target.value)}
+                placeholder="To"
+                title="Filter to date"
+                className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-300"
+              />
 
               {/* ── Clear filters ── */}
               {hasActiveFilters && (
@@ -698,6 +896,24 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
                   <button onClick={() => setSearch('')} className="hover:text-gray-900 ml-0.5">×</button>
                 </span>
               )}
+              {filterIndianFY && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-purple-50 border border-purple-200 text-purple-700 rounded-full text-xs font-medium">
+                  📊 {filterIndianFY}
+                  <button onClick={() => setFilterIndianFY('')} className="hover:text-purple-900 ml-0.5">×</button>
+                </span>
+              )}
+              {fromDate && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-cyan-50 border border-cyan-200 text-cyan-700 rounded-full text-xs font-medium">
+                  📅 From {fromDate}
+                  <button onClick={() => setFromDate('')} className="hover:text-cyan-900 ml-0.5">×</button>
+                </span>
+              )}
+              {toDate && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-cyan-50 border border-cyan-200 text-cyan-700 rounded-full text-xs font-medium">
+                  📅 To {toDate}
+                  <button onClick={() => setToDate('')} className="hover:text-cyan-900 ml-0.5">×</button>
+                </span>
+              )}
               <span className="text-xs text-gray-400 ml-1">— {filtered.length} result{filtered.length !== 1 ? 's' : ''}</span>
             </div>
           )}
@@ -719,7 +935,7 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b border-gray-100">
                   <tr>
-                    {['Date','Narration','Chq/Ref No','Value Date','Withdrawal','Deposit','Balance','Category','Actions'].map(h => (
+                    {['Date','Narration','Chq/Ref No','Value Date','Withdrawal','Deposit','Closing Balance','Category','Actions'].map(h => (
                       <th key={h} className="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase whitespace-nowrap">{h}</th>
                     ))}
                   </tr>
@@ -728,34 +944,51 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
                   {filtered.map((row, i) => {
                     const isCredit = Number(row['Deposit Amt']||0) > 0 || row.Type === 'Credit';
                     return (
-                      <tr key={i} className="hover:bg-gray-50 transition-colors">
-                        <td className="px-3 py-2.5 whitespace-nowrap text-gray-700">{formatDateDisplay(row.Date)}</td>
-                        <td className="px-3 py-2.5 max-w-xs">
-                          <p className="truncate text-gray-800" title={row.Narration||row.Description}>{row.Narration||row.Description||'—'}</p>
-                        </td>
-                        <td className="px-3 py-2.5 text-xs text-gray-400 whitespace-nowrap font-mono">{row['Chq/Ref No']||'—'}</td>
-                        <td className="px-3 py-2.5 whitespace-nowrap text-gray-500 text-xs">{formatDateDisplay(row['Value Date'])||'—'}</td>
-                        <td className="px-3 py-2.5 whitespace-nowrap text-right font-medium text-red-600">
-                          {row['Withdrawal Amt'] ? INR.format(Number(row['Withdrawal Amt'])) : '—'}
-                        </td>
-                        <td className="px-3 py-2.5 whitespace-nowrap text-right font-medium text-emerald-600">
-                          {row['Deposit Amt'] ? INR.format(Number(row['Deposit Amt'])) : '—'}
-                        </td>
-                        <td className="px-3 py-2.5 whitespace-nowrap text-right font-semibold text-gray-700">
-                          {row['Closing Balance'] ? INR.format(Number(row['Closing Balance'])) : '—'}
-                        </td>
-                        <td className="px-3 py-2.5">
-                          <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
-                            {row.Category||'—'}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2.5">
-                          <div className="flex gap-2">
-                            <button onClick={() => setViewRow(row)} className="text-blue-500 hover:text-blue-700 text-xs font-medium">View</button>
-                            {isAdmin && <button onClick={() => setEditRow(row)} className="text-green-500 hover:text-green-700 text-xs font-medium">Edit</button>}
-                          </div>
-                        </td>
-                      </tr>
+<tr key={i} className="hover:bg-gray-50 transition-colors">
+  {/* Date */}
+  <td className="px-3 py-2.5 whitespace-nowrap text-gray-700">{formatDateDisplay(row.Date)}</td>
+  
+  {/* Narration */}
+  <td className="px-3 py-2.5 max-w-xs">
+    <p className="truncate text-gray-800" title={row.Narration||row.Description}>{row.Narration||row.Description||'—'}</p>
+  </td>
+  
+  {/* Chq/Ref No */}
+  <td className="px-3 py-2.5 text-xs text-gray-400 whitespace-nowrap font-mono">{row['Chq/Ref No']||'—'}</td>
+  
+  {/* Value Date */}
+  <td className="px-3 py-2.5 whitespace-nowrap text-gray-500 text-xs">{formatDateDisplay(row['Value Date'])||'—'}</td>
+  
+  {/* Withdrawal */}
+  <td className="px-3 py-2.5 whitespace-nowrap text-right font-medium text-red-600">
+    {row['Withdrawal Amt'] ? INR.format(Number(row['Withdrawal Amt'])) : '—'}
+  </td>
+  
+  {/* Deposit */}
+  <td className="px-3 py-2.5 whitespace-nowrap text-right font-medium text-emerald-600">
+    {row['Deposit Amt'] ? INR.format(Number(row['Deposit Amt'])) : '—'}
+  </td>
+  
+  {/* Closing Balance ← THIS IS THE KEY COLUMN */}
+  <td className="px-3 py-2.5 whitespace-nowrap text-right font-semibold text-purple-700">
+    {row['Closing Balance'] ? INR.format(Number(row['Closing Balance'])) : '—'}
+  </td>
+  
+  {/* Category */}
+  <td className="px-3 py-2.5">
+    <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+      {row.Category||'—'}
+    </span>
+  </td>
+  
+  {/* Actions */}
+  <td className="px-3 py-2.5">
+    <div className="flex gap-2">
+      <button onClick={() => setViewRow(row)} className="text-blue-500 hover:text-blue-700 text-xs font-medium">View</button>
+      {isAdmin && <button onClick={() => setEditRow(row)} className="text-green-500 hover:text-green-700 text-xs font-medium">Edit</button>}
+    </div>
+  </td>
+</tr>
                     );
                   })}
                   {filtered.length === 0 && (
@@ -775,7 +1008,8 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50">
                   <tr>
-                    {['Date','Description','Type','Amount','Category','Actions'].map(h => (
+                  
+                      {['Date','Description','Vendor','Type','Amount','Category','Closing Balance','Actions'].map(h => (
                       <th key={h} className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{h}</th>
                     ))}
                   </tr>
@@ -785,11 +1019,15 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
                     <tr key={i} className="hover:bg-gray-50">
                       <td className="px-4 py-3">{formatDateDisplay(row.Date)}</td>
                       <td className="px-4 py-3"><span className="line-clamp-1">{row.Description}</span></td>
+                      <td className="px-4 py-3 text-xs font-medium text-gray-600">{row.Vendor || '—'}</td>
                       <td className="px-4 py-3">
                         <span className={`status-badge ${(row.Type||'').toLowerCase()==='credit'?'bg-green-100 text-green-700':'bg-red-100 text-red-700'}`}>{row.Type||'Debit'}</span>
                       </td>
                       <td className="px-4 py-3 font-medium">{INR.format(Number(row.Amount||0))}</td>
                       <td className="px-4 py-3">{row.Category}</td>
+                      <td className="px-4 py-3 text-right font-semibold text-purple-700">
+                        {row['Closing Balance'] ? INR.format(Number(String(row['Closing Balance']).replace(/,/g,''))) : '—'}
+                      </td>
                       <td className="px-4 py-3">
                         <div className="flex gap-2">
                           <button onClick={() => setViewRow(row)} className="text-blue-500 text-sm">View</button>
@@ -800,7 +1038,7 @@ function TransactionsPage({ data, isAdmin, onRefresh, chartOfAccounts }) {
                   ))}
                   {filtered.length === 0 && (
                     <tr>
-                      <td colSpan="6" className="px-4 py-10 text-center">
+                      <td colSpan="7" className="px-4 py-10 text-center">
                         <p className="text-gray-400">No transactions found.</p>
                         {hasActiveFilters && (
                           <button onClick={clearAllFilters} className="mt-2 text-blue-500 text-sm hover:underline">Clear filters</button>
